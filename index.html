@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Smart Home Survey App</title>
     <link rel="stylesheet" href="styles.css">
+    <script src="html2pdf.bundle.min.js"></script>
 </head>
 <body>
     <!-- HEADER -->
@@ -44,12 +45,7 @@
                 <input type="tel" class="form-input" placeholder="Enter client phone number" id="clientPhone">
             </div>
 
-            <div class="form-group">
-                <label class="form-label">Client Image</label>
-                <input type="file" class="form-input" id="clientImage" accept="image/*">
-                <small>Upload a profile image for the client</small>
-            </div>
-
+  
             <div class="form-group">
                 <label class="form-label">Property Type *</label>
                 <select class="form-select" id="propertyType">
@@ -134,7 +130,7 @@
             </div>
 
             <!-- Action Buttons -->
-            <button class="btn btn-primary" onclick="generatePDF()">Generate PDF Invoice</button>
+             <button class="btn btn-primary" onclick="generatePDF()">Generate PDF Report</button>
             <button class="btn btn-secondary" onclick="goToRooms()">Back to Rooms</button>
         </div>
     </div>
@@ -265,11 +261,7 @@
                 <input type="tel" class="form-input" id="editPropertyClientPhone">
             </div>
 
-            <div class="form-group">
-                <label class="form-label">Client Image</label>
-                <input type="file" class="form-input" id="editPropertyClientImage" accept="image/*">
-                <small>Upload a new profile image for the client</small>
-            </div>
+       
 
             <div class="form-group">
                 <label class="form-label">Property Type *</label>
@@ -299,8 +291,6 @@
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getFirestore, doc, collection, onSnapshot, setDoc, addDoc, updateDoc, deleteDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";// Add getDocs to your imports
-// ... inside window.fbMethods ...
-// 2. YOUR CONFIG (Paste yours here)
 const firebaseConfig = {
     apiKey: "AIzaSyBKCQFB0shdoDWCEpxfGVvuJpg8e1OzBh4",
     authDomain: "housbot-eb8b9.firebaseapp.com",
@@ -309,16 +299,16 @@ const firebaseConfig = {
     messagingSenderId: "913097857610",
     appId: "1:913097857610:web:1f7e90b8f865b118f6e4b3"
 };
-// 3. Initialize Firebase
+//  Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-// 4. Attach to window so data.js and app.js can see them
 window.db = db;
 window.fbMethods = { doc, collection, onSnapshot, setDoc, addDoc, updateDoc, deleteDoc, getDocs };</script>
 
 <script src="data.js"></script>
 <script src="app.js"></script>
+
 
 </body>
 </html>

@@ -51,12 +51,9 @@ function renderDashboard() {
         const card = document.createElement('div');
         card.className = 'property-card';
 
-        const imageHtml = property.clientImage ? 
-            `<img src="${property.clientImage}" alt="${property.clientName}" class="property-card-image">` : 
-            '';
-
+     
         card.innerHTML = `
-            ${imageHtml}
+            
             <div class="property-card-info-section" onclick="goToRooms('${property.firebaseId}')">
                 <div class="property-card-header">
                     <div class="property-card-title">${property.clientName}</div>
@@ -64,7 +61,7 @@ function renderDashboard() {
                 </div>
                 <div class="property-card-info">📍 ${property.location}</div>
                 <div class="property-card-info">📐 ${property.totalArea} m²</div>
-                ${property.clientPhone ? `<div class="property-card-phone">📱 ${property.clientPhone}</div>` : ''}
+                ${property.clientPhone ? `<div class="property-card-phone">📞 ${property.clientPhone}</div>` : ''}
                 <div class="property-card-cost">Total: ${totalCost.toLocaleString()} EGP</div>
             </div>
             <div class="property-card-actions">
@@ -79,7 +76,6 @@ function renderDashboard() {
 function clearCreatePropertyForm() {
     document.getElementById('clientName').value = '';
     document.getElementById('clientPhone').value = '';
-    document.getElementById('clientImage').value = '';
     document.getElementById('propertyType').value = '';
     document.getElementById('propertyLocation').value = '';
     document.getElementById('propertyArea').value = '';
@@ -88,7 +84,6 @@ function clearCreatePropertyForm() {
 function saveProperty() {
     const clientName = document.getElementById('clientName').value.trim();
     const clientPhone = document.getElementById('clientPhone').value.trim();
-    const clientImageInput = document.getElementById('clientImage');
     const propertyType = document.getElementById('propertyType').value;
     const location = document.getElementById('propertyLocation').value.trim();
     const totalArea = parseFloat(document.getElementById('propertyArea').value) || 0;
@@ -98,27 +93,17 @@ function saveProperty() {
         return;
     }
 
-    // Handle image upload
-    let clientImage = 'https://i.pravatar.cc/150?img=' + Math.floor(Math.random() * 70);
-    if (clientImageInput.files && clientImageInput.files[0]) {
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            clientImage = e.target.result;
-            createNewProperty(clientName, clientPhone, clientImage, propertyType, location, totalArea);
-        };
-        reader.readAsDataURL(clientImageInput.files[0]);
-    } else {
-        createNewProperty(clientName, clientPhone, clientImage, propertyType, location, totalArea);
-    }
+
+        createNewProperty(clientName, clientPhone, propertyType, location, totalArea);
+    
 }
 
-async function createNewProperty(clientName, clientPhone, clientImage, propertyType, location, totalArea) {
+async function createNewProperty(clientName, clientPhone, propertyType, location, totalArea) {
     const { collection, addDoc } = window.fbMethods;
     
     const newProperty = {
         clientName: clientName,
         clientPhone: clientPhone,
-        clientImage: clientImage,
         propertyType: propertyType,
         location: location,
         totalArea: totalArea,
@@ -492,20 +477,20 @@ function renderInvoicePage() {
         goToDashboard();
         return;
     }
-
+    
     const invoiceSummary = document.getElementById('invoiceSummary');
     invoiceSummary.innerHTML = '';
     let totalAmount = 0;
-
+    
     property.rooms.forEach(room => {
         const roomTotal = calculateRoomTotal(room);
         totalAmount += roomTotal;
-
+        
         const roomDiv = document.createElement('div');
         roomDiv.className = 'invoice-room';
-
+        
         let roomHtml = `<div class="invoice-room-title">${room.name}</div>`;
-
+        
         room.devices.forEach(roomDevice => {
             const device = getDeviceById(roomDevice.deviceId);
             if (device) {
@@ -518,7 +503,7 @@ function renderInvoicePage() {
                 `;
             }
         });
-
+        
         roomHtml += `
             <div class="invoice-device-line" style="font-weight: bold; border-top: 1px solid rgba(0, 212, 255, 0.2); padding-top: 0.5rem; margin-top: 0.5rem;">
                 <span>Room Total:</span>
@@ -529,7 +514,7 @@ function renderInvoicePage() {
         roomDiv.innerHTML = roomHtml;
         invoiceSummary.appendChild(roomDiv);
     });
-
+    
     document.getElementById('invoiceTotalAmount').textContent = totalAmount.toLocaleString() + ' EGP';
 }
 
@@ -558,51 +543,257 @@ async function removeDeviceFromInvoice(roomId, deviceId) {
         }
     }
 }
-
-function generatePDF() {
+async function generatePDF() {
+    if (typeof html2pdf === 'undefined') {
+        alert("The PDF library is being blocked by your browser settings.");
+        return;
+    }
     const property = getPropertyById(currentPropertyId);
-    const totalCost = calculatePropertyTotal(property);
+    if (!property) return;
 
-    let pdfContent = `
-Smart Home Survey Invoice
-========================
+    const element = document.createElement('div');
+    element.style.cssText = `
+        background: #0a0e14; 
+        color: white; 
+        font-family: sans-serif; 
+        width: 210mm; 
+        margin: 0; 
+        padding: 0;
+    `;
 
-Client: ${property.clientName}
-Phone: ${property.clientPhone}
-Location: ${property.location}
-Property Type: ${property.propertyType}
-Total Area: ${property.totalArea} m²
+    const generationDate = new Date().toLocaleDateString('en-GB', {
+        day: 'numeric', month: 'numeric', year: 'numeric'
+    });
 
----
+    const pageStyle = `
+        height: 296.5mm; 
+        width: 210mm; 
+        box-sizing: border-box; 
+        padding: 40px; 
+        position: relative; 
+        overflow: hidden;
+    `;
 
-DEVICES BREAKDOWN:
+    // --- PAGE 1: COVER ---
+    let html = `
+        <div style="${pageStyle} display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
+            <div style="border: 5px solid #00d4ff; width: 95%; height: 95%; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 20px; box-sizing: border-box;">
+                <img src="https://raw.githubusercontent.com/Farah-1/housbot/main/hausbot_background.jpg" style="max-width: 200px; margin-bottom: 40px;">
+                <h1 style="color: #00d4ff; font-size: 3.5rem; text-transform: uppercase; letter-spacing: 5px; margin: 0;">Proforma Invoice</h1>
+                <p style="font-size: 1.2rem; opacity: 0.8; margin-top: 10px;">Smart Home Solutions & Automation Services</p>
+                <div style="margin-top: 60px; text-align: left; width: 60%; border-top: 1px solid rgba(0,212,255,0.3); padding-top: 20px;">
+                    <p><strong>Company:</strong> HAUSBOT</p>
+                    <p><strong>Date:</strong> ${generationDate}</p>
+                    <p><strong>Ref No:</strong> ${Math.floor(Math.random() * 100)}</p>
+                </div>
+            </div>
+        </div>
 
-`;
+        <div style="${pageStyle}">
+            <h2 style="color: #00d4ff; border-bottom: 2px solid #00d4ff; padding-bottom: 10px;">About HAUSBOT</h2>
+            <h3 style="margin-top: 30px;">Who We Are</h3>
+            <p style="line-height: 1.8; opacity: 0.9;">HAUSBOT is a premier provider of cutting-edge smart home solutions. We specialize in transforming living spaces into intelligent environments that enhance comfort, security, and efficiency.</p>
+            <h3 style="color: #00d4ff; margin-top: 40px;">Our Core Services</h3>
+            <ul style="list-style: none; padding: 0; line-height: 2;">
+                <li>🔊 High-quality sound systems and immersive home theater setups.</li>
+                <li>🛡️ Advanced intrusion alarms and comprehensive security systems.</li>
+                <li>💡 Full home automation, smart lighting, and climate control.</li>
+                <li>⚙️ Custom integration and smart device management.</li>
+            </ul>
+            <h3 style="color: #00d4ff; margin-top: 40px;">Our Mission</h3>
+            <p style="opacity: 0.9;">To achieve your dreams and provide the better life you deserve through seamless technology integration.</p>
+        </div>
+
+        <div style="${pageStyle}">
+            <h2 style="color: #00d4ff; border-bottom: 2px solid #00d4ff; padding-bottom: 10px;">Client & Project Details</h2>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 30px;">
+                <div>
+                    <h3 style="color: #00d4ff;">Bill To</h3>
+                    <p><strong>Client Name:</strong><br>${property.clientName}</p>
+                    <p><strong>Address:</strong><br>${property.location}</p>
+                    <p><strong>Contact:</strong><br>${property.clientPhone}</p>
+                </div>
+      
+            </div>
+        </div>
+    `;
+
+    // --- PAGE 4: HARDWARE QUOTATION ---
+    html += `
+        <div style="padding: 40px; min-height: 296.5mm; box-sizing: border-box;">
+            <h2 style="color: #00d4ff; border-bottom: 2px solid #00d4ff; padding-bottom: 10px;">Hardware Quotation</h2>
+            <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
+                <thead>
+                    <tr style="background: rgba(0,212,255,0.2); text-align: left;">
+                        <th style="padding: 15px; border: 1px solid #00d4ff;">Item Description</th>
+                        <th style="padding: 15px; border: 1px solid #00d4ff;">Qty</th>
+                        <th style="padding: 15px; border: 1px solid #00d4ff;">Unit Price</th>
+                        <th style="padding: 15px; border: 1px solid #00d4ff; text-align: right;">Total</th>
+                    </tr>
+                </thead>
+                <tbody>
+    `;
 
     property.rooms.forEach(room => {
-        pdfContent += `\n${room.name}:\n`;
         room.devices.forEach(roomDevice => {
             const device = getDeviceById(roomDevice.deviceId);
             if (device) {
-                const lineTotal = device.price * roomDevice.quantity;
-                pdfContent += `  - ${device.name} x${roomDevice.quantity} = ${lineTotal.toLocaleString()} EGP\n`;
+                html += `
+                    <tr style="page-break-inside: avoid;">
+                        <td style="padding: 15px; border: 1px solid rgba(0,212,255,0.3); font-size: 0.9rem;">
+                            <strong>${device.name}</strong><br>
+                            <small style="opacity: 0.6;">${room.name} | ${device.brand}</small>
+                        </td>
+                        <td style="padding: 15px; border: 1px solid rgba(0,212,255,0.3);">${roomDevice.quantity}</td>
+                        <td style="padding: 15px; border: 1px solid rgba(0,212,255,0.3);">${device.price.toLocaleString()}</td>
+                        <td style="padding: 15px; border: 1px solid rgba(0,212,255,0.3); text-align: right;">${(device.price * roomDevice.quantity).toLocaleString()} EGP</td>
+                    </tr>
+                `;
             }
         });
     });
 
-    pdfContent += `\n---\nTOTAL PROJECT COST: ${totalCost.toLocaleString()} EGP`;
+    const total = calculatePropertyTotal(property);
+    html += `
+                </tbody>
+            </table>
+            <div style="margin-top: 30px; text-align: right; background: rgba(0,212,255,0.1); padding: 20px; page-break-inside: avoid;">
+                <h3 style="margin: 0;">Hardware Subtotal: <span style="color: #00d4ff;">${total.toLocaleString()} EGP</span></h3>
+            </div>
+        </div>
+    `;
 
-    // Create a downloadable text file (in a real app, this would be a PDF)
-    const element = document.createElement('a');
-    element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(pdfContent));
-    element.setAttribute('download', `invoice_${property.clientName.replace(/\s+/g, '_')}.txt`);
-    element.style.display = 'none';
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
+    // --- PAGE 5: SERVICES & INSTALLATION ---
+    html += `
+        <div style="${pageStyle}">
+            <h2 style="color: #00d4ff; border-bottom: 2px solid #00d4ff; padding-bottom: 10px;">Services & Installation</h2>
+            <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
+                <tr style="border-bottom: 1px solid rgba(0,212,255,0.3);">
+                    <td style="padding: 20px;">Professional Installation & Configuration</td>
+                    <td style="text-align: right; color: #00d4ff; font-weight: bold;">INCLUDED</td>
+                </tr>
+                <tr style="border-bottom: 1px solid rgba(0,212,255,0.3);">
+                    <td style="padding: 20px;">System Programming & Integration</td>
+                    <td style="text-align: right; color: #00d4ff; font-weight: bold;">INCLUDED</td>
+                </tr>
+                <tr style="border-bottom: 1px solid rgba(0,212,255,0.3);">
+                    <td style="padding: 20px;">After-Sales Support & Maintenance (1 Year)</td>
+                    <td style="text-align: right; color: #00d4ff; font-weight: bold;">INCLUDED</td>
+                </tr>
+            </table>
+            <p style="margin-top: 40px; font-style: italic; opacity: 0.7; line-height: 1.6;">
+                All services are performed by HAUSBOT Certified Technicians to ensure the highest quality of integration and performance.
+            </p>
+        </div>
+    `;
 
-    alert('Invoice generated and downloaded successfully!');
+    // --- PAGE 6: FINANCIAL SUMMARY ---
+    html += `
+        <div style="${pageStyle} display: flex; flex-direction: column; justify-content: center;">
+            <h2 style="color: #00d4ff; border-bottom: 2px solid #00d4ff; padding-bottom: 10px; margin-bottom: 40px;">Financial Summary</h2>
+            <div style="background: rgba(255,255,255,0.05); padding: 30px; border-radius: 10px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 20px; font-size: 1.2rem;">
+                    <span>Total Hardware Components:</span>
+                    <span>${total.toLocaleString()} EGP</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 20px; font-size: 1.2rem;">
+                    <span>Total Services & Installation:</span>
+                    <span style="color: #00d4ff;">FREE</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 20px; font-size: 1.2rem;">
+                    <span>Value Added Tax (VAT):</span>
+                    <span>0 EGP</span>
+                </div>
+                <div style="border-top: 2px solid #00d4ff; margin-top: 20px; padding-top: 20px; display: flex; justify-content: space-between; align-items: center;">
+                    <h1 style="margin: 0; font-size: 2.5rem; color: #00d4ff;">Grand Total</h1>
+                    <h1 style="margin: 0; font-size: 2.5rem; color: #00d4ff;">${total.toLocaleString()} EGP</h1>
+                </div>
+            </div>
+            <p style="text-align: center; margin-top: 30px; opacity: 0.6;">Inclusive of all taxes and services</p>
+        </div>
+    `;
+
+    // --- PAGE 7: PAYMENT SCHEDULE ---
+    html += `
+        <div style="${pageStyle}">
+            <h2 style="color: #00d4ff; border-bottom: 2px solid #00d4ff; padding-bottom: 10px;">Payment Terms & Schedule</h2>
+            <div style="margin-top: 50px;">
+                <div style="display: flex; align-items: center; margin-bottom: 40px;">
+                    <div style="background: #00d4ff; color: black; padding: 20px; font-size: 2rem; font-weight: bold; min-width: 100px; text-align: center; border-radius: 10px;">50%</div>
+                    <div style="margin-left: 30px;">
+                        <h3 style="margin: 0; color: #00d4ff;">Down Payment</h3>
+                        <p style="margin: 5px 0 0 0; opacity: 0.8;">Required upon signing the proforma invoice.</p>
+                    </div>
+                </div>
+                <div style="display: flex; align-items: center; margin-bottom: 40px;">
+                    <div style="background: #00d4ff; color: black; padding: 20px; font-size: 2rem; font-weight: bold; min-width: 100px; text-align: center; border-radius: 10px;">40%</div>
+                    <div style="margin-left: 30px;">
+                        <h3 style="margin: 0; color: #00d4ff;">Hardware Delivery</h3>
+                        <p style="margin: 5px 0 0 0; opacity: 0.8;">Due upon hardware arrival at the installation site.</p>
+                    </div>
+                </div>
+                <div style="display: flex; align-items: center;">
+                    <div style="background: #00d4ff; color: black; padding: 20px; font-size: 2rem; font-weight: bold; min-width: 100px; text-align: center; border-radius: 10px;">10%</div>
+                    <div style="margin-left: 30px;">
+                        <h3 style="margin: 0; color: #00d4ff;">Final Handover</h3>
+                        <p style="margin: 5px 0 0 0; opacity: 0.8;">Payable after successful testing and client handover.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // --- PAGE 8: TERMS & CONTACT ---
+    html += `
+        <div style="${pageStyle}">
+            <h2 style="color: #00d4ff; border-bottom: 2px solid #00d4ff; padding-bottom: 10px;">Terms & Conditions</h2>
+            <div style="margin-top: 30px;">
+                <h3 style="color: #00d4ff;">Validity</h3>
+                <p>This proforma invoice is valid for 90 days from the date of issuance.</p>
+                <h3 style="color: #00d4ff; margin-top: 30px;">Warranty</h3>
+                <p>We provide a 2-year comprehensive warranty on all hardware components.</p>
+                <div style="background: rgba(255,0,0,0.1); border-left: 5px solid red; padding: 20px; margin-top: 40px;">
+                    <strong>! Important Notes:</strong><br>
+                    Final prices are subject to change based on a final site survey.
+                </div>
+            </div>
+        </div>
+
+        <div style="${pageStyle} display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
+            <h2 style="color: #00d4ff; font-size: 2.5rem;">Need Help?</h2>
+            <p style="font-size: 1.5rem; margin-top: 20px;">Call Us</p>
+            <div style="border: 2px solid #00d4ff; padding: 20px 40px; border-radius: 50px; font-size: 2rem; color: #00d4ff; margin-top: 20px;">
+                +20 10 40743437
+            </div>
+            <img src="https://raw.githubusercontent.com/Farah-1/housbot/main/hausbot_background.jpg" style="max-width: 150px; margin-top: 60px; opacity: 0.5;">
+        </div>
+    `;
+
+    element.innerHTML = html;
+
+    const opt = {
+        margin: 0,
+        filename: `${property.clientName}_Proforma_Invoice.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { 
+            scale: 2, 
+            backgroundColor: '#0a0e14', 
+            useCORS: true,
+            scrollY: 0,
+            scrollX: 0
+        },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak: { mode: 'avoid-all' }
+    };
+
+    try {
+        await html2pdf().set(opt).from(element).save();
+    } catch (err) {
+        console.error("PDF Error:", err);
+    }
 }
+
+
 
 // ===== SETTINGS MODAL =====
 
@@ -733,7 +924,6 @@ function deleteDevice(deviceId) {
         alert('Device deleted successfully!');
     }
 }
-
 // ===== BACKGROUND IMAGE =====
 
 function updateBackgroundImage() {
