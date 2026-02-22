@@ -57,7 +57,7 @@ function renderDashboard() {
 
         card.innerHTML = `
             ${imageHtml}
-            <div class="property-card-info-section" onclick="goToRooms(${property.id})">
+            <div class="property-card-info-section" onclick="goToRooms('${property.firebaseId}')">
                 <div class="property-card-header">
                     <div class="property-card-title">${property.clientName}</div>
                     <div class="property-card-type">${property.propertyType.charAt(0).toUpperCase() + property.propertyType.slice(1)}</div>
@@ -68,11 +68,10 @@ function renderDashboard() {
                 <div class="property-card-cost">Total: ${totalCost.toLocaleString()} EGP</div>
             </div>
             <div class="property-card-actions">
-                <button class="btn btn-edit btn-small" onclick="event.stopPropagation(); openEditPropertyModal(${property.id})">✏️ Edit</button>
-                <button class="btn btn-danger btn-small" onclick="event.stopPropagation(); deleteProperty(${property.id})">🗑️ Delete</button>
+                <button class="btn btn-edit btn-small" onclick="event.stopPropagation(); openEditPropertyModal('${property.firebaseId}')">✏️ Edit</button>
+                <button class="btn btn-danger btn-small" onclick="event.stopPropagation(); deleteProperty('${property.firebaseId}')">🗑️ Delete</button>
             </div>
         `;
-
         propertiesList.appendChild(card);
     });
 }
@@ -113,23 +112,24 @@ function saveProperty() {
     }
 }
 
-function createNewProperty(clientName, clientPhone, clientImage, propertyType, location, totalArea) {
+async function createNewProperty(clientName, clientPhone, clientImage, propertyType, location, totalArea) {
+    const { collection, addDoc } = window.fbMethods;
+    
     const newProperty = {
-        id: getNextPropertyId(),
         clientName: clientName,
         clientPhone: clientPhone,
         clientImage: clientImage,
         propertyType: propertyType,
         location: location,
         totalArea: totalArea,
-        rooms: []
+        rooms: [],
+        createdAt: new Date()
     };
 
-    // Create default rooms based on property type
     const roomTypes = ROOM_TYPES[propertyType] || [];
-    roomTypes.forEach(roomType => {
+    roomTypes.forEach((roomType, index) => {
         newProperty.rooms.push({
-            id: getNextRoomId(),
+            id: index + 1, 
             name: roomType,
             floor: 'Ground',
             type: roomType,
@@ -137,17 +137,13 @@ function createNewProperty(clientName, clientPhone, clientImage, propertyType, l
         });
     });
 
-    propertiesDatabase.push(newProperty);
-    saveDataToLocalStorage();
-    
-    // Set the new property as current
-    currentPropertyId = newProperty.id;
-    currentRoomId = newProperty.rooms[0]?.id || null;
-    
-    // Navigate to rooms page
-    setTimeout(() => {
+    try {
+        const docRef = await addDoc(collection(window.db, "properties"), newProperty);
+        currentPropertyId = docRef.id;
         goToRooms();
-    }, 100);
+    } catch (e) {
+        alert("Error saving to cloud: " + e.message);
+    }
 }
 
 // ===== EDIT PROPERTY FUNCTIONALITY =====
@@ -173,15 +169,11 @@ function closeEditPropertyModal() {
     editingPropertyId = null;
 }
 
-function saveEditedProperty() {
+async function saveEditedProperty() {
     if (!editingPropertyId) return;
-
-    const property = getPropertyById(editingPropertyId);
-    if (!property) return;
+    const { doc, updateDoc } = window.fbMethods;
 
     const clientName = document.getElementById('editPropertyClientName').value.trim();
-    const clientPhone = document.getElementById('editPropertyClientPhone').value.trim();
-    const clientImageInput = document.getElementById('editPropertyClientImage');
     const propertyType = document.getElementById('editPropertyType').value;
     const location = document.getElementById('editPropertyLocation').value.trim();
     const totalArea = parseFloat(document.getElementById('editPropertyArea').value) || 0;
@@ -191,28 +183,21 @@ function saveEditedProperty() {
         return;
     }
 
-    property.clientName = clientName;
-    property.clientPhone = clientPhone;
-    property.propertyType = propertyType;
-    property.location = location;
-    property.totalArea = totalArea;
-
-    // Handle image upload if provided
-    if (clientImageInput.files && clientImageInput.files[0]) {
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            property.clientImage = e.target.result;
-            saveDataToLocalStorage();
-            closeEditPropertyModal();
-            renderDashboard();
-            alert('Property updated successfully!');
-        };
-        reader.readAsDataURL(clientImageInput.files[0]);
-    } else {
-        saveDataToLocalStorage();
+    try {
+        const propertyRef = doc(window.db, "properties", editingPropertyId);
+        await updateDoc(propertyRef, {
+            clientName,
+            propertyType,
+            location,
+            totalArea,
+            clientPhone: document.getElementById('editPropertyClientPhone').value.trim()
+        });
+        
         closeEditPropertyModal();
-        renderDashboard();
-        alert('Property updated successfully!');
+        alert('Property updated in Cloud!');
+    } catch (e) {
+        console.error("Error updating property:", e);
+        alert("Failed to sync edit to cloud.");
     }
 }
 
@@ -328,8 +313,7 @@ function renderDeviceCategories(property) {
                             <input type="number" value="${roomDevice.quantity}" min="1" 
                                 onchange="updateDeviceQuantity(${currentRoomId}, ${roomDevice.deviceId}, this.value)">
                             <span class="device-item-total">Total: ${total.toLocaleString()} EGP</span>
-                            <button class="btn btn-danger btn-small" onclick="removeDeviceFromRoom(${currentRoomId}, ${roomDevice.deviceId})" style="margin-left: 0.5rem;">Remove</button>
-                        </div>
+                            <button class="btn btn-danger btn-small" onclick="removeDeviceFromRoom(${currentRoomId}, '${roomDevice.deviceId}')" style="margin-left: 0.5rem;">Remove</button>                        </div>
                     </div>
                 `;
             }
@@ -344,8 +328,7 @@ function renderDeviceCategories(property) {
         `;
 
         categoryDevices.forEach(device => {
-            categoryHtml += `<option value="${device.id}">${device.name} (${device.price.toLocaleString()} EGP)</option>`;
-        });
+            categoryHtml += `<option value="${device.firebaseId}">${device.name} (${device.price.toLocaleString()} EGP)</option>`;   });
 
         categoryHtml += `
                     </select>
@@ -362,10 +345,12 @@ function renderDeviceCategories(property) {
     });
 }
 
-function addDeviceToRoom(categoryKey) {
+async function addDeviceToRoom(categoryKey) {
+    const { doc, updateDoc } = window.fbMethods;
     const selectElement = document.getElementById(`select-${categoryKey}`);
     const qtyElement = document.getElementById(`qty-${categoryKey}`);
-    const deviceId = parseInt(selectElement.value);
+    
+    const deviceId = selectElement.value;
     const quantity = parseInt(qtyElement.value) || 1;
 
     if (!deviceId) {
@@ -374,25 +359,84 @@ function addDeviceToRoom(categoryKey) {
     }
 
     const property = getPropertyById(currentPropertyId);
-    const room = property.rooms.find(r => r.id === currentRoomId);
+    if (!property) return; 
 
-    // Check if device already exists in room
-    const existingDevice = room.devices.find(d => d.deviceId === deviceId);
+    const room = property.rooms.find(r => r.id == currentRoomId);
+    if (!room) return; 
+
+    const existingDevice = room.devices.find(d => d.deviceId == deviceId);
+    
     if (existingDevice) {
         existingDevice.quantity += quantity;
     } else {
         room.devices.push({ deviceId: deviceId, quantity: quantity });
     }
 
-    saveDataToLocalStorage();
-    renderDeviceCategories(property);
-    renderCurrentRoom(property);
-    
-    // Update property total
-    const totalCost = calculatePropertyTotal(property);
-    document.getElementById('propertyTotalCost').textContent = totalCost.toLocaleString() + ' EGP';
+    try {
+        const propertyRef = doc(window.db, "properties", currentPropertyId);
+        await updateDoc(propertyRef, {
+            rooms: property.rooms
+        });
+        
+        renderDeviceCategories(property);
+        renderCurrentRoom(property);
+    } catch (error) {
+        console.error("Error updating room:", error);
+        alert("Could not save to cloud.");
+    }
 }
 
+function toggleRoomInput() {
+    const container = document.getElementById('newRoomInputContainer');
+    const input = document.getElementById('newRoomNameInput');
+    
+    if (container.style.display === 'none') {
+        container.style.display = 'block';
+        input.focus();
+    } else {
+        container.style.display = 'none';
+        input.value = '';
+    }
+}
+
+async function addNewRoomToProperty() {
+    const { doc, updateDoc } = window.fbMethods;
+    const roomNameInput = document.getElementById('newRoomNameInput');
+    const roomName = roomNameInput.value.trim();
+
+    if (!roomName) {
+        alert("Please enter a room name");
+        return;
+    }
+
+    const property = getPropertyById(currentPropertyId);
+    if (!property) return;
+
+    const newRoom = {
+        id: Date.now(),
+        name: roomName,
+        floor: 'Ground',
+        type: 'Custom',
+        devices: [] 
+    };
+
+    property.rooms.push(newRoom);
+
+    try {
+        const propertyRef = doc(window.db, "properties", currentPropertyId);
+        await updateDoc(propertyRef, {
+            rooms: property.rooms
+        });
+
+        roomNameInput.value = '';
+        toggleRoomInput();
+        currentRoomId = newRoom.id;
+        renderRoomsPage();
+    } catch (error) {
+        console.error("Error adding room:", error);
+        alert("Failed to save room to Cloud.");
+    }
+}
 function updateDeviceQuantity(roomId, deviceId, newQuantity) {
     const property = getPropertyById(currentPropertyId);
     const room = property.rooms.find(r => r.id === roomId);
@@ -436,7 +480,6 @@ function updateAddDeviceQuantity(categoryKey) {
     const device = getDeviceById(parseInt(selectElement.value));
     if (device) {
         const qtyElement = document.getElementById(`qty-${categoryKey}`);
-        // You can add visual feedback here if needed
     }
 }
 
@@ -471,8 +514,7 @@ function renderInvoicePage() {
                     <div class="invoice-device-line">
                         <span>${device.name} (Qty: ${roomDevice.quantity})</span>
                         <span class="invoice-device-line-total">${lineTotal.toLocaleString()} EGP</span>
-                        <button class="btn btn-danger btn-small" onclick="removeDeviceFromInvoice(${room.id}, ${roomDevice.deviceId})" style="margin-left: 0.5rem;">Remove</button>
-                    </div>
+                        <button class="btn btn-danger btn-small" onclick="removeDeviceFromInvoice(${room.id}, '${roomDevice.deviceId}')" style="margin-left: 0.5rem;">Remove</button>                    </div>
                 `;
             }
         });
@@ -491,14 +533,29 @@ function renderInvoicePage() {
     document.getElementById('invoiceTotalAmount').textContent = totalAmount.toLocaleString() + ' EGP';
 }
 
-function removeDeviceFromInvoice(roomId, deviceId) {
+async function removeDeviceFromInvoice(roomId, deviceId) {
+    const { doc, updateDoc } = window.fbMethods;
     const property = getPropertyById(currentPropertyId);
+    
+    // Find the specific room
     const room = property.rooms.find(r => r.id === roomId);
     
     if (room) {
+        // Filter out the device locally
         room.devices = room.devices.filter(d => d.deviceId !== deviceId);
-        saveDataToLocalStorage();
-        renderInvoicePage();
+        
+        try {
+            // Sync the change to the Cloud
+            const propertyRef = doc(window.db, "properties", currentPropertyId);
+            await updateDoc(propertyRef, {
+                rooms: property.rooms
+            });
+            
+            renderInvoicePage();
+        } catch (error) {
+            console.error("Error removing device from invoice:", error);
+            alert("Could not update cloud database.");
+        }
     }
 }
 
@@ -566,17 +623,10 @@ function renderDevicesList() {
         const itemDiv = document.createElement('div');
         itemDiv.className = 'device-list-item';
 
-        itemDiv.innerHTML = `
-            <div class="device-list-item-info">
-                <div class="device-list-item-name">${device.name}</div>
-                <div class="device-list-item-price">${device.price.toLocaleString()} EGP</div>
-                <div class="device-list-item-category">${DEVICE_CATEGORIES[device.category].name}</div>
-            </div>
-            <div class="device-list-item-actions">
-                <button class="btn btn-edit btn-small" onclick="openEditDeviceModal(${device.id})">Edit</button>
-                <button class="btn btn-danger btn-small" onclick="deleteDevice(${device.id})">Delete</button>
-            </div>
-        `;
+itemDiv.innerHTML = `
+    ...
+<button class="btn btn-danger btn-small" onclick="deleteDevice('${device.firebaseId || device.id}')">Delete</button>    ...
+`;
 
         devicesList.appendChild(itemDiv);
     });
@@ -600,35 +650,36 @@ function clearAddDeviceForm() {
     document.getElementById('newDeviceSupplier').value = '';
 }
 
-function addNewDevice() {
+
+async function addNewDevice() {
+    const { collection, addDoc } = window.fbMethods;
     const name = document.getElementById('newDeviceName').value.trim();
     const category = document.getElementById('newDeviceCategory').value;
-    const brand = document.getElementById('newDeviceBrand').value.trim();
-    const protocol = document.getElementById('newDeviceProtocol').value.trim();
     const price = parseFloat(document.getElementById('newDevicePrice').value) || 0;
-    const supplier = document.getElementById('newDeviceSupplier').value.trim();
 
     if (!name || !category || !price) {
-        alert('Please fill in all required fields (Name, Category, Price)');
+        alert('Please fill in all required fields');
         return;
     }
 
     const newDevice = {
-        id: getNextDeviceId(),
         name: name,
         category: category,
-        brand: brand,
-        protocol: protocol,
+        brand: document.getElementById('newDeviceBrand').value.trim(),
+        protocol: document.getElementById('newDeviceProtocol').value.trim(),
         price: price,
-        supplier: supplier,
-        active: true
+        supplier: document.getElementById('newDeviceSupplier').value.trim(),
+        active: true,
+        createdAt: new Date()
     };
 
-    devicesDatabase.push(newDevice);
-    saveDataToLocalStorage();
-    closeAddDeviceModal();
-    renderDevicesList();
-    alert('Device added successfully!');
+    try {
+        await addDoc(collection(window.db, "devices"), newDevice);
+        closeAddDeviceModal();
+        alert('Device added to Cloud Database!');
+    } catch (e) {
+        console.error("Error adding device: ", e);
+    }
 }
 
 function openEditDeviceModal(deviceId) {
@@ -650,33 +701,28 @@ function closeEditDeviceModal() {
     editingDeviceId = null;
 }
 
-function saveEditedDevice() {
+async function saveEditedDevice() {
     if (!editingDeviceId) return;
-
-    const device = getDeviceById(editingDeviceId);
-    if (!device) return;
+    const { doc, updateDoc } = window.fbMethods;
 
     const name = document.getElementById('editDeviceName').value.trim();
     const price = parseFloat(document.getElementById('editDevicePrice').value) || 0;
-    const brand = document.getElementById('editDeviceBrand').value.trim();
-    const protocol = document.getElementById('editDeviceProtocol').value.trim();
-    const supplier = document.getElementById('editDeviceSupplier').value.trim();
 
-    if (!name || !price) {
-        alert('Please fill in all required fields');
-        return;
+    try {
+        const deviceRef = doc(window.db, "devices", editingDeviceId);
+        await updateDoc(deviceRef, {
+            name: name,
+            price: price,
+            brand: document.getElementById('editDeviceBrand').value.trim(),
+            protocol: document.getElementById('editDeviceProtocol').value.trim(),
+            supplier: document.getElementById('editDeviceSupplier').value.trim()
+        });
+
+        closeEditDeviceModal();
+        alert('Device updated in Cloud!');
+    } catch (e) {
+        console.error("Error updating device:", e);
     }
-
-    device.name = name;
-    device.price = price;
-    device.brand = brand;
-    device.protocol = protocol;
-    device.supplier = supplier;
-
-    saveDataToLocalStorage();
-    closeEditDeviceModal();
-    renderDevicesList();
-    alert('Device updated successfully!');
 }
 
 function deleteDevice(deviceId) {
@@ -709,10 +755,6 @@ document.addEventListener('DOMContentLoaded', function() {
     // Set initial background image
     document.body.style.backgroundImage = `url('${backgroundImageUrl}')`;
     document.getElementById('backgroundImageUrl').value = backgroundImageUrl;
-
-    // Render dashboard on load
-    renderDashboard();
-
     // Close modals when clicking outside
     window.onclick = function(event) {
         const settingsModal = document.getElementById('settingsModal');
@@ -735,4 +777,42 @@ document.addEventListener('DOMContentLoaded', function() {
     };
 
     console.log('Smart Home Survey App Initialized');
+});
+// ===== INITIALIZATION =====
+
+
+
+document.addEventListener('DOMContentLoaded', async function() {
+   document.body.style.backgroundImage = `url('${backgroundImageUrl}')`;
+    if (document.getElementById('backgroundImageUrl')) {
+        document.getElementById('backgroundImageUrl').value = backgroundImageUrl;
+    }
+    if (typeof initFirebaseSync === 'function') {
+        initFirebaseSync();
+    }
+
+
+
+    // 3. Close modals when clicking outside the content box
+    window.onclick = function(event) {
+        const settingsModal = document.getElementById('settingsModal');
+        const addDeviceModal = document.getElementById('addDeviceModal');
+        const editDeviceModal = document.getElementById('editDeviceModal');
+        const editPropertyModal = document.getElementById('editPropertyModal');
+
+        if (event.target === settingsModal) {
+            settingsModal.classList.remove('active');
+        }
+        if (event.target === addDeviceModal) {
+            addDeviceModal.classList.remove('active');
+        }
+        if (event.target === editDeviceModal) {
+            editDeviceModal.classList.remove('active');
+        }
+        if (event.target === editPropertyModal) {
+            editPropertyModal.classList.remove('active');
+        }
+    };
+
+    console.log('Smart Home Survey App Initialized with Central DB');
 });

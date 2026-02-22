@@ -119,7 +119,18 @@ body::before {
 .page.active {
     display: block;
 }
+.form-input {
+    color: #ffffff !important;
+}
 
+.form-input::placeholder {
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.btn-small {
+    width: auto !important;
+    min-width: 80px;
+}
 @keyframes fadeIn {
     from {
         opacity: 0;

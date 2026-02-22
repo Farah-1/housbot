@@ -83,7 +83,26 @@
                 <div class="property-total-cost-label">Property Total Cost</div>
                 <div class="property-total-cost-amount" id="propertyTotalCost">0 EGP</div>
             </div>
+<div style="display: flex; align-items: center; gap: 10px; margin-bottom: 20px;">
+    <div class="room-tabs" id="roomTabs" style="margin-bottom: 0; flex-wrap: nowrap; overflow-x: auto;"></div>
+    
+    <button class="room-tab" id="showAddRoomBtn" onclick="toggleRoomInput()" style="background: rgba(0, 212, 255, 0.2); border: 1px dashed #00d4ff; color: #00d4ff; min-width: 45px;">+</button>
+</div>
 
+<div id="newRoomInputContainer" class="room-header" style="display: none; margin-bottom: 20px; border: 1px solid #00d4ff; padding: 15px;">
+    <div class="room-header-title" style="font-size: 1rem; margin-bottom: 10px;">Create New Room</div>
+    
+    <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center;">
+        <input type="text" id="newRoomNameInput" class="form-input" 
+               placeholder="e.g., Guest Room" 
+               style="flex: 2; min-width: 200px; background: rgba(255,255,255,0.1); color: #ffffff !important; border: 1px solid rgba(0,212,255,0.3);">
+        
+        <div style="display: flex; gap: 8px; flex: 1; justify-content: flex-start; min-width: 150px;">
+            <button class="btn btn-primary btn-small" onclick="addNewRoomToProperty()" style="margin: 0; padding: 8px 15px; font-size: 0.85rem;">Add</button>
+            <button class="btn btn-secondary btn-small" onclick="toggleRoomInput()" style="margin: 0; padding: 8px 15px; font-size: 0.85rem;">Cancel</button>
+        </div>
+    </div>
+</div>
             <!-- Room Navigation Tabs -->
             <div class="room-tabs" id="roomTabs"></div>
 
@@ -277,8 +296,29 @@
             <button class="btn btn-secondary" onclick="closeEditPropertyModal()">Cancel</button>
         </div>
     </div>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import { getFirestore, doc, collection, onSnapshot, setDoc, addDoc, updateDoc, deleteDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";// Add getDocs to your imports
+// ... inside window.fbMethods ...
+// 2. YOUR CONFIG (Paste yours here)
+const firebaseConfig = {
+    apiKey: "AIzaSyBKCQFB0shdoDWCEpxfGVvuJpg8e1OzBh4",
+    authDomain: "housbot-eb8b9.firebaseapp.com",
+    projectId: "housbot-eb8b9",
+    storageBucket: "housbot-eb8b9.firebasestorage.app",
+    messagingSenderId: "913097857610",
+    appId: "1:913097857610:web:1f7e90b8f865b118f6e4b3"
+};
+// 3. Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
 
-    <script src="data.js"></script>
-    <script src="app.js"></script>
+// 4. Attach to window so data.js and app.js can see them
+window.db = db;
+window.fbMethods = { doc, collection, onSnapshot, setDoc, addDoc, updateDoc, deleteDoc, getDocs };</script>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+
 </body>
 </html>

@@ -22,7 +22,7 @@ const ROOM_TYPES = {
 };
 
 // Default Devices Database
-let devicesDatabase = [
+const DEFAULT_DEVICES_LIST = [
     {
         id: 1,
         name: 'Zigbee Smart Switch',
@@ -124,120 +124,42 @@ let devicesDatabase = [
         active: true
     }
 ];
-
+let devicesDatabase = [];
 // Properties Database
-let propertiesDatabase = [
-    {
-        id: 1,
-        clientName: 'Ahmed Hassan',
-        clientPhone: '+20 100 123 4567',
-        clientImage: 'https://i.pravatar.cc/150?img=1',
-        propertyType: 'apartment',
-        location: 'Downtown Cairo, Egypt',
-        totalArea: 120,
-        rooms: [
-            {
-                id: 1,
-                name: 'Living Room',
-                floor: 'Ground',
-                type: 'Reception',
-                devices: [
-                    { deviceId: 1, quantity: 2 },
-                    { deviceId: 3, quantity: 1 }
-                ]
-            },
-            {
-                id: 2,
-                name: 'Master Bedroom',
-                floor: 'First',
-                type: 'Master Bedroom',
-                devices: [
-                    { deviceId: 1, quantity: 1 }
-                ]
-            },
-            {
-                id: 3,
-                name: 'Kitchen',
-                floor: 'Ground',
-                type: 'Kitchen',
-                devices: [
-                    { deviceId: 1, quantity: 3 },
-                    { deviceId: 4, quantity: 1 }
-                ]
-            },
-            {
-                id: 4,
-                name: 'Bathroom',
-                floor: 'Ground',
-                type: 'Bathroom',
-                devices: []
-            }
-        ]
-    },
-    {
-        id: 2,
-        clientName: 'Fatima Al-Mansouri',
-        clientPhone: '+20 100 234 5678',
-        clientImage: 'https://i.pravatar.cc/150?img=2',
-        propertyType: 'villa',
-        location: 'New Cairo, Egypt',
-        totalArea: 350,
-        rooms: [
-            {
-                id: 5,
-                name: 'Living Room',
-                floor: 'Ground',
-                type: 'Reception',
-                devices: [
-                    { deviceId: 1, quantity: 3 },
-                    { deviceId: 5, quantity: 2 }
-                ]
-            },
-            {
-                id: 6,
-                name: 'Master Bedroom',
-                floor: 'First',
-                type: 'Master Bedroom',
-                devices: [
-                    { deviceId: 1, quantity: 2 },
-                    { deviceId: 7, quantity: 1 }
-                ]
-            }
-        ]
-    },
-    {
-        id: 3,
-        clientName: 'Tech Startup Inc.',
-        clientPhone: '+20 100 345 6789',
-        clientImage: 'https://i.pravatar.cc/150?img=3',
-        propertyType: 'office',
-        location: 'Smart City, Egypt',
-        totalArea: 500,
-        rooms: [
-            {
-                id: 7,
-                name: 'Workspace',
-                floor: 'First',
-                type: 'Workspace',
-                devices: [
-                    { deviceId: 2, quantity: 5 },
-                    { deviceId: 3, quantity: 3 }
-                ]
-            },
-            {
-                id: 8,
-                name: 'Meeting Room',
-                floor: 'First',
-                type: 'Meeting Room',
-                devices: [
-                    { deviceId: 1, quantity: 2 },
-                    { deviceId: 9, quantity: 1 }
-                ]
-            }
-        ]
-    }
-];
+let propertiesDatabase = [];
+async function seedDevicesOnce() {
+    const checkFirebase = setInterval(async () => {
+        if (window.fbMethods && window.fbMethods.addDoc) {
+            clearInterval(checkFirebase);
+            const { collection, addDoc } = window.fbMethods;
+            
+            console.log("FORCE SEEDING: Starting upload of 10 devices...");
+            
+            try {
+                const devicesRef = collection(window.db, "devices");
 
+                for (const device of DEFAULT_DEVICES_LIST) {
+                    const deviceToUpload = {
+                        name: device.name,
+                        category: device.category,
+                        brand: device.brand,
+                        protocol: device.protocol,
+                        price: device.price,
+                        supplier: device.supplier,
+                        active: true
+                    };
+
+                    await addDoc(devicesRef, deviceToUpload);
+                    console.log(`✅ Uploaded: ${deviceToUpload.name}`);
+                }
+                
+                console.log("🏁 ALL DEVICES UPLOADED. Check your Firebase Console!");
+            } catch (e) {
+                console.error("❌ FORCE SEED ERROR:", e);
+            }
+        }
+    }, 1000);
+}
 // Current State
 let currentPropertyId = null;
 let currentRoomId = null;
@@ -247,16 +169,16 @@ let editingDeviceId = null;
 // ===== HELPER FUNCTIONS =====
 
 function getDeviceById(deviceId) {
-    return devicesDatabase.find(d => d.id === deviceId);
+    return devicesDatabase.find(d => (d.firebaseId && d.firebaseId == deviceId) || d.id == deviceId);
 }
 
 function getPropertyById(propertyId) {
-    return propertiesDatabase.find(p => p.id === propertyId);
+    return propertiesDatabase.find(p => p.firebaseId === propertyId || p.id == propertyId);
 }
 
 function getRoomById(roomId) {
     for (let property of propertiesDatabase) {
-        const room = property.rooms.find(r => r.id === roomId);
+        const room = property.rooms.find(r => r.id == roomId);
         if (room) return room;
     }
     return null;
@@ -303,21 +225,23 @@ function getNextRoomId() {
 
 // ===== LOCAL STORAGE FUNCTIONS =====
 
+// Function to start syncing with Firebase
+function initFirebaseSync() {
+    const { collection, onSnapshot } = window.fbMethods;
+
+    // Listen for Devices changes
+    onSnapshot(collection(window.db, "devices"), (snapshot) => {
+        devicesDatabase = snapshot.docs.map(doc => ({ firebaseId: doc.id, ...doc.data() }));
+        if (typeof renderDevicesList === 'function') renderDevicesList();
+    });
+
+    // Listen for Properties changes
+    onSnapshot(collection(window.db, "properties"), (snapshot) => {
+        propertiesDatabase = snapshot.docs.map(doc => ({ firebaseId: doc.id, ...doc.data() }));
+        if (typeof renderDashboard === 'function') renderDashboard();
+    });
+}
+
 function saveDataToLocalStorage() {
-    localStorage.setItem('devicesDatabase', JSON.stringify(devicesDatabase));
-    localStorage.setItem('propertiesDatabase', JSON.stringify(propertiesDatabase));
-    localStorage.setItem('backgroundImageUrl', backgroundImageUrl);
+    console.log("Data is now handled by Firebase automatically.");
 }
-
-function loadDataFromLocalStorage() {
-    const savedDevices = localStorage.getItem('devicesDatabase');
-    const savedProperties = localStorage.getItem('propertiesDatabase');
-    const savedBackground = localStorage.getItem('backgroundImageUrl');
-
-    if (savedDevices) devicesDatabase = JSON.parse(savedDevices);
-    if (savedProperties) propertiesDatabase = JSON.parse(savedProperties);
-    if (savedBackground) backgroundImageUrl = savedBackground;
-}
-
-// Load data on page load
-loadDataFromLocalStorage();
