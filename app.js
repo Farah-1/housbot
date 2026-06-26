@@ -65,8 +65,8 @@ function renderDashboard() {
                 <div class="property-card-cost">Total: ${totalCost.toLocaleString()} EGP</div>
             </div>
             <div class="property-card-actions">
-                <button class="btn btn-edit btn-small" onclick="event.stopPropagation(); openEditPropertyModal('${property.firebaseId}')">✏️ Edit</button>
-                <button class="btn btn-danger btn-small" onclick="event.stopPropagation(); deleteProperty('${property.firebaseId}')">🗑️ Delete</button>
+                <button class="btn btn-edit btn-small" onclick="event.stopPropagation(); openEditPropertyModal('${property.firebaseId}')">Edit</button>
+                <button class="btn btn-danger btn-small" onclick="event.stopPropagation(); deleteProperty('${property.firebaseId}')">Delete</button>
             </div>
         `;
         propertiesList.appendChild(card);
@@ -186,12 +186,18 @@ async function saveEditedProperty() {
     }
 }
 
-function deleteProperty(propertyId) {
+async function deleteProperty(propertyId) {
     if (confirm('Are you sure you want to delete this property and all its data?')) {
-        propertiesDatabase = propertiesDatabase.filter(p => p.id !== propertyId);
-        saveDataToLocalStorage();
-        renderDashboard();
-        alert('Property deleted successfully!');
+        const { doc, deleteDoc } = window.fbMethods;
+        try {
+            const propertyRef = doc(window.db, "properties", propertyId);
+            await deleteDoc(propertyRef);
+            // Dashboard will auto-update because of onSnapshot in data.js
+            alert('Property deleted successfully!');
+        } catch (e) {
+            console.error("Delete failed:", e);
+            alert("Failed to delete from Cloud.");
+        }
     }
 }
 
@@ -269,7 +275,10 @@ function renderDeviceCategories(property) {
 
     Object.keys(DEVICE_CATEGORIES).forEach(categoryKey => {
         const categoryInfo = DEVICE_CATEGORIES[categoryKey];
-        const categoryDevices = devicesDatabase.filter(d => d.category === categoryKey && d.active);
+        const categoryDevices = devicesDatabase.filter(d => {
+            const isActive = d.status === 'Active' || (d.status === undefined && d.active !== false);
+            return d.category === categoryKey && isActive;
+        });
 
         const categoryDiv = document.createElement('div');
         categoryDiv.className = 'device-category';
@@ -422,7 +431,8 @@ async function addNewRoomToProperty() {
         alert("Failed to save room to Cloud.");
     }
 }
-function updateDeviceQuantity(roomId, deviceId, newQuantity) {
+async function updateDeviceQuantity(roomId, deviceId, newQuantity) {
+    const { doc, updateDoc } = window.fbMethods;
     const property = getPropertyById(currentPropertyId);
     const room = property.rooms.find(r => r.id === roomId);
     const roomDevice = room.devices.find(d => d.deviceId === deviceId);
@@ -434,32 +444,58 @@ function updateDeviceQuantity(roomId, deviceId, newQuantity) {
         } else {
             roomDevice.quantity = qty;
         }
-        saveDataToLocalStorage();
-        renderDeviceCategories(property);
-        renderCurrentRoom(property);
-        
-        // Update property total
-        const totalCost = calculatePropertyTotal(property);
-        document.getElementById('propertyTotalCost').textContent = totalCost.toLocaleString() + ' EGP';
+
+        try {
+            const propertyRef = doc(window.db, "properties", currentPropertyId);
+            await updateDoc(propertyRef, {
+                rooms: property.rooms
+            });
+
+            renderDeviceCategories(property);
+            renderCurrentRoom(property);
+            
+            // Update property total
+            const totalCost = calculatePropertyTotal(property);
+            document.getElementById('propertyTotalCost').textContent = totalCost.toLocaleString() + ' EGP';
+        } catch (e) {
+            console.error("Update quantity failed:", e);
+        }
     }
 }
-
-function removeDeviceFromRoom(roomId, deviceId) {
+async function removeDeviceFromRoom(roomId, deviceId) {
+    const { doc, updateDoc } = window.fbMethods;
     const property = getPropertyById(currentPropertyId);
+    
+    if (!property) return;
+
     const room = property.rooms.find(r => r.id === roomId);
     
     if (room) {
+        // 1. Remove the device from the local array
         room.devices = room.devices.filter(d => d.deviceId !== deviceId);
-        saveDataToLocalStorage();
-        renderDeviceCategories(property);
-        renderCurrentRoom(property);
         
-        // Update property total
-        const totalCost = calculatePropertyTotal(property);
-        document.getElementById('propertyTotalCost').textContent = totalCost.toLocaleString() + ' EGP';
+        try {
+            // 2. Sync the updated rooms array to Firebase
+            const propertyRef = doc(window.db, "properties", currentPropertyId);
+            await updateDoc(propertyRef, {
+                rooms: property.rooms
+            });
+            
+            // 3. Update the UI after successful cloud sync
+            renderDeviceCategories(property);
+            renderCurrentRoom(property);
+            
+            // 4. Update the total cost display
+            const totalCost = calculatePropertyTotal(property);
+            document.getElementById('propertyTotalCost').textContent = totalCost.toLocaleString() + ' EGP';
+            
+            console.log("Device removed and synced to cloud.");
+        } catch (error) {
+            console.error("Error removing device from cloud:", error);
+            alert("Could not sync removal to the cloud database.");
+        }
     }
 }
-
 function updateAddDeviceQuantity(categoryKey) {
     const selectElement = document.getElementById(`select-${categoryKey}`);
     const device = getDeviceById(parseInt(selectElement.value));
@@ -551,221 +587,393 @@ async function generatePDF() {
     const property = getPropertyById(currentPropertyId);
     if (!property) return;
 
+    // --- FINANCIAL CALCULATIONS ---
+    const hardwareSubtotal = calculatePropertyTotal(property);
+    const serviceFees = hardwareSubtotal * 0.15; // 15% Services
+    if (serviceFees<3000){
+
+        fees=3000;
+    }else{
+        fees= serviceFees;
+    }
+    const taxAmount = hardwareSubtotal * 0.0;    // 4% Tax
+    const finalProjectTotal = hardwareSubtotal + fees + taxAmount;
+
     const element = document.createElement('div');
-    element.style.cssText = `
-        background: #0a0e14; 
-        color: white; 
-        font-family: sans-serif; 
-        width: 210mm; 
-        margin: 0; 
-        padding: 0;
-    `;
+    element.style.cssText = `background: #0a0e14; width: 297mm; margin: 0; padding: 0;`;
 
     const generationDate = new Date().toLocaleDateString('en-GB', {
-        day: 'numeric', month: 'numeric', year: 'numeric'
+        day: 'numeric', month: 'long', year: 'numeric'
     });
 
     const pageStyle = `
-        height: 296.5mm; 
-        width: 210mm; 
+        height: 209mm; 
+        width: 297mm; 
         box-sizing: border-box; 
         padding: 40px; 
         position: relative; 
-        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        background: #0a0e14;
+        color: white;
+        font-family: 'Segoe UI', sans-serif;
     `;
 
-    // --- PAGE 1: COVER ---
+    const cardStyle = `
+        background: rgba(255, 255, 255, 0.05);
+        color: white;
+        border: 1px solid rgba(0, 212, 255, 0.2);
+        border-radius: 12px;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+    `;
+       
+    // --- PAGE 1: COVER ---https://github.com/Hausbot-eg/Survey/blob/main/logo.png
     let html = `
-        <div style="${pageStyle} display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
-            <div style="border: 5px solid #00d4ff; width: 95%; height: 95%; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 20px; box-sizing: border-box;">
-                <img src="https://raw.githubusercontent.com/Farah-1/housbot/main/hausbot_background.jpg" style="max-width: 200px; margin-bottom: 40px;">
-                <h1 style="color: #00d4ff; font-size: 3.5rem; text-transform: uppercase; letter-spacing: 5px; margin: 0;">Proforma Invoice</h1>
-                <p style="font-size: 1.2rem; opacity: 0.8; margin-top: 10px;">Smart Home Solutions & Automation Services</p>
-                <div style="margin-top: 60px; text-align: left; width: 60%; border-top: 1px solid rgba(0,212,255,0.3); padding-top: 20px;">
-                    <p><strong>Company:</strong> HAUSBOT</p>
-                    <p><strong>Date:</strong> ${generationDate}</p>
-                    <p><strong>Ref No:</strong> ${Math.floor(Math.random() * 100)}</p>
+        <div style="${pageStyle} justify-content: center; align-items: center;">
+            <div style="width: 85%; border: 1.5px solid #00d4ff; border-radius: 20px; padding: 40px; position: relative; background: radial-gradient(circle at center, #111827 0%, #0a0e14 100%);">
+            <div style="text-align: center; margin-bottom: 20px;">
+<div style="text-align: center; margin-bottom: 20px;">
+    <div style="display: inline-block; padding: 10px; border-radius: 8px;">
+            <img src="
+            https://raw.githubusercontent.com/Hausbot-eg/Survey/main/logo.png" style="max-width: 150px; margin-top: 60px; opacity: 0.5;">
+            
+    </div>
+</div>
+</div>
+                <h1 style="color: #00d4ff; font-size: 3.2rem; text-align: center; text-transform: uppercase; letter-spacing: 12px; margin: 0; font-weight: 700;">SMART HOME SURVEY</h1>
+                <p style="text-align: center; font-size: 1.1rem; opacity: 0.6; margin-bottom: 40px; letter-spacing: 2px;">Generated on ${generationDate}</p>
+                <div style="height: 1px; background: linear-gradient(90deg, transparent, rgba(0,212,255,0.5), transparent); margin-bottom: 30px;"></div>
+                <div style="display: flex; justify-content: space-between; align-items: flex-end; padding: 0 20px;">
+                    <div style="text-align: left;">
+                        <h3 style="color: #00d4ff; font-size: 1.2rem; margin-bottom: 10px; text-transform: uppercase;">Client Information</h3>
+                        <p style="font-size: 1.1rem; margin: 4px 0;"><strong>Name:</strong> ${property.clientName}</p>
+                        <p style="font-size: 1.1rem; margin: 4px 0;"><strong>Location:</strong> ${property.location || 'N/A'}</p>
+                        <p style="font-size: 1.1rem; margin: 4px 0;"><strong>Unit:</strong> ${property.propertyType || 'N/A'}</p>
+                    </div>
+                    <div style="text-align: right;">
+                        <h3 style="color: #00d4ff; font-size: 1.2rem; margin-bottom: 5px; text-transform: uppercase;">Investment Estimate</h3>
+                        <h2 style="color: #00d4ff; font-size: 2.8rem; margin: 0; font-weight: 600;">${finalProjectTotal.toLocaleString()} EGP</h2>
+                    </div>
                 </div>
             </div>
         </div>
+        <div class="html2pdf__page-break"></div>
 
         <div style="${pageStyle}">
-            <h2 style="color: #00d4ff; border-bottom: 2px solid #00d4ff; padding-bottom: 10px;">About HAUSBOT</h2>
-            <h3 style="margin-top: 30px;">Who We Are</h3>
-            <p style="line-height: 1.8; opacity: 0.9;">HAUSBOT is a premier provider of cutting-edge smart home solutions. We specialize in transforming living spaces into intelligent environments that enhance comfort, security, and efficiency.</p>
-            <h3 style="color: #00d4ff; margin-top: 40px;">Our Core Services</h3>
-            <ul style="list-style: none; padding: 0; line-height: 2;">
-                <li>🔊 High-quality sound systems and immersive home theater setups.</li>
-                <li>🛡️ Advanced intrusion alarms and comprehensive security systems.</li>
-                <li>💡 Full home automation, smart lighting, and climate control.</li>
-                <li>⚙️ Custom integration and smart device management.</li>
-            </ul>
-            <h3 style="color: #00d4ff; margin-top: 40px;">Our Mission</h3>
-            <p style="opacity: 0.9;">To achieve your dreams and provide the better life you deserve through seamless technology integration.</p>
-        </div>
-
-        <div style="${pageStyle}">
-            <h2 style="color: #00d4ff; border-bottom: 2px solid #00d4ff; padding-bottom: 10px;">Client & Project Details</h2>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 30px;">
-                <div>
-                    <h3 style="color: #00d4ff;">Bill To</h3>
-                    <p><strong>Client Name:</strong><br>${property.clientName}</p>
-                    <p><strong>Address:</strong><br>${property.location}</p>
-                    <p><strong>Contact:</strong><br>${property.clientPhone}</p>
+            <h2 style="color: #00d4ff; border-bottom: 1px solid #00d4ff; padding-bottom: 10px; margin-bottom: 25px; font-size: 1.8rem;">About HAUSBOT</h2>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 25px;">
+                <div style="${cardStyle} border-left: 4px solid #00d4ff;">
+                    <h3 style="color: #00d4ff; margin-top: 0; font-size: 1.2rem;">Who We Are</h3>
+                    <p style="line-height: 1.5; font-size: 0.95rem; opacity: 0.9; margin: 0;">HAUSBOT is a premier provider of cutting-edge smart home solutions. We specialize in transforming living spaces into intelligent environments.</p>
                 </div>
-      
+                <div style="${cardStyle} border-left: 4px solid #00d4ff;">
+                    <h3 style="color: #00d4ff; margin-top: 0; font-size: 1.2rem;">Our Mission</h3>
+                    <p style="line-height: 1.5; font-size: 0.95rem; opacity: 0.9; margin: 0;">To achieve your dreams and provide the better life you deserve through seamless technology integration.</p>
+                </div>
+            </div>
+            <h2 style="color: #00d4ff; font-size: 1.5rem; margin-bottom: 15px; margin-top: 30px">Our Core Services</h2>
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px;">
+                <div style="${cardStyle} flex-direction: row; align-items: center; gap: 15px; padding: 15px;">
+                    <div style="font-size: 1.8rem;color: #00d4ff;">•</div>
+                    <div><strong style="color: #00d4ff; display: block;">Integration</strong><span style="font-size: 0.85rem; opacity: 0.8;">Custom integration and smart device management.</span></div>
+                </div>
+                <div style="${cardStyle} flex-direction: row; align-items: center; gap: 15px; padding: 15px;">
+                    <div style="font-size: 1.8rem;color: #00d4ff;">•</div>
+                    <div><strong style="color: #00d4ff; display: block;">Automation</strong><span style="font-size: 0.85rem; opacity: 0.8;">Full home automation and lighting control.</span></div>
+                </div>
+                <div style="${cardStyle} flex-direction: row; align-items: center; gap: 15px; padding: 15px;">
+                    <div style="font-size: 1.8rem;color: #00d4ff;">•</div>
+                    <div><strong style="color: #00d4ff; display: block;">Security</strong><span style="font-size: 0.85rem; opacity: 0.8;">Advanced intrusion alarms and security systems.</span></div>
+                </div>
+                <div style="${cardStyle} flex-direction: row; align-items: center; gap: 15px; padding: 15px;">
+                    <div style="font-size: 1.8rem;color: #00d4ff;">•</div>
+                    <div><strong style="color: #00d4ff; display: block;">Audio & Video</strong><span style="font-size: 0.85rem; opacity: 0.8;">High-quality sound and home theater setups.</span></div>
+                </div>
             </div>
         </div>
+        <div class="html2pdf__page-break"></div>
     `;
 
-    // --- PAGE 4: HARDWARE QUOTATION ---
-    html += `
-        <div style="padding: 40px; min-height: 296.5mm; box-sizing: border-box;">
-            <h2 style="color: #00d4ff; border-bottom: 2px solid #00d4ff; padding-bottom: 10px;">Hardware Quotation</h2>
-            <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
-                <thead>
-                    <tr style="background: rgba(0,212,255,0.2); text-align: left;">
-                        <th style="padding: 15px; border: 1px solid #00d4ff;">Item Description</th>
-                        <th style="padding: 15px; border: 1px solid #00d4ff;">Qty</th>
-                        <th style="padding: 15px; border: 1px solid #00d4ff;">Unit Price</th>
-                        <th style="padding: 15px; border: 1px solid #00d4ff; text-align: right;">Total</th>
-                    </tr>
-                </thead>
-                <tbody>
-    `;
-
+    // --- ROOM-BY-ROOM BREAKDOWN ---
     property.rooms.forEach(room => {
-        room.devices.forEach(roomDevice => {
-            const device = getDeviceById(roomDevice.deviceId);
-            if (device) {
-                html += `
-                    <tr style="page-break-inside: avoid;">
-                        <td style="padding: 15px; border: 1px solid rgba(0,212,255,0.3); font-size: 0.9rem;">
-                            <strong>${device.name}</strong><br>
-                            <small style="opacity: 0.6;">${room.name} | ${device.brand}</small>
-                        </td>
-                        <td style="padding: 15px; border: 1px solid rgba(0,212,255,0.3);">${roomDevice.quantity}</td>
-                        <td style="padding: 15px; border: 1px solid rgba(0,212,255,0.3);">${device.price.toLocaleString()}</td>
-                        <td style="padding: 15px; border: 1px solid rgba(0,212,255,0.3); text-align: right;">${(device.price * roomDevice.quantity).toLocaleString()} EGP</td>
-                    </tr>
-                `;
-            }
-        });
+        if (room.devices && room.devices.length > 0) {
+            let roomRows = '';
+            let roomTotal = 0;
+            room.devices.forEach(roomDevice => {
+                const device = getDeviceById(roomDevice.deviceId);
+                if (device) {
+                    const subtotal = device.price * roomDevice.quantity;
+                    roomTotal += subtotal;
+                    roomRows += `
+                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.1);">
+                            <td style="padding: 15px 10px; font-weight: 600;">${device.name}</td>
+                            <td style="padding: 15px 10px; text-align: center;">${roomDevice.quantity}</td>
+                            <td style="padding: 15px 10px; text-align: center;">${device.price.toLocaleString()}</td>
+                            <td style="padding: 15px 10px; text-align: right; font-weight: bold; color: #00d4ff;">${subtotal.toLocaleString()} EGP</td>
+                        </tr>
+                    `;
+                }
+            });
+
+            html += `
+                <div style="${pageStyle}">
+                    <div style="background: rgba(0, 212, 255, 0.1); border-left: 5px solid #00d4ff; border-radius: 8px; padding: 20px; margin-bottom: 30px;">
+                        <h2 style="color: #00d4ff; font-size: 2.2rem; margin: 0; text-transform: capitalize;">${room.name}</h2>
+                        <p style="margin: 5px 0 0 0; opacity: 0.7; font-size: 1.1rem;">Floor: ${room.floor || 'N/A'}</p>
+                    </div>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="border-bottom: 2px solid #00d4ff; text-transform: uppercase; font-size: 0.9rem; color: #00d4ff;">
+                                <th style="text-align: left; padding: 10px;">Device Description</th>
+                                <th style="text-align: center; padding: 10px;">Qty</th>
+                                <th style="text-align: center; padding: 10px;">Unit Price</th>
+                                <th style="text-align: right; padding: 10px;">Subtotal</th>
+                            </tr>
+                        </thead>
+                        <tbody>${roomRows}</tbody>
+                    </table>
+                    <div style=" text-align: right; padding-top: 20px;margin-top:auto;">
+                        <span style="font-size: 1.2rem; margin-right: 20px; opacity: 0.8;">Room Total:</span>
+                        <span style="font-size: 1.8rem; color: #00d4ff; font-weight: bold;">${roomTotal.toLocaleString()} EGP</span>
+                    </div>
+                </div>
+                <div class="html2pdf__page-break"></div>
+            `;
+        }
     });
 
-    const total = calculatePropertyTotal(property);
+ // Configuration
+const maxRowsPerPage = 15; // Adjust this number based on your styling
+let rowCount = 0;
+
+// --- HARDWARE QUOTATION (TOTAL TABLE) ---
+// Initialize the first page
+html += `
+    <div style="${pageStyle}">
+        <h2 style="color: #00d4ff; padding-bottom: 10px; font-size: 1.8rem;">Full Hardware Quotation</h2>
+        <table style="width: 100%; margin-top: 20px; border-collapse: collapse;">
+            <thead>
+                <tr style="text-align: left;">
+                    <th style="padding: 12px; border-bottom: 1px solid #00d4ff; font-size: 0.9rem; color: #00d4ff;">Item Description</th>
+                    <th style="padding: 12px; border-bottom: 1px solid #00d4ff; font-size: 0.9rem; color: #00d4ff; text-align: center;">Qty</th>
+                    <th style="padding: 12px; border-bottom: 1px solid #00d4ff; font-size: 0.9rem; color: #00d4ff; text-align: center;">UNIT PRICE</th>
+
+                    <th style="padding: 12px; border-bottom: 1px solid #00d4ff; font-size: 0.9rem; color: #00d4ff; text-align: right;">Total</th>
+                </tr>
+            </thead>
+            <tbody style="font-size: 0.85rem;">
+`;
+
+
+        // 1. First, create an object to store aggregated device data
+const aggregatedDevices = {};
+
+property.rooms.forEach(room => {
+    room.devices.forEach(roomDevice => {
+        const deviceId = roomDevice.deviceId;
+        
+        if (aggregatedDevices[deviceId]) {
+            // If device already exists, just add to the quantity
+            aggregatedDevices[deviceId].quantity += roomDevice.quantity;
+        } else {
+            // If it's the first time seeing this device, fetch details and initialize
+            const deviceDetails = getDeviceById(deviceId);
+            if (deviceDetails) {
+                aggregatedDevices[deviceId] = {
+                    ...deviceDetails,
+                    quantity: roomDevice.quantity
+                };
+            }
+        }
+    });
+});
+
+// 2. Now loop through the aggregated object to generate the HTML
+Object.values(aggregatedDevices).forEach(device => {
+    // Check if we need to break to a new page
+    if (rowCount > 0 && rowCount % maxRowsPerPage === 0) {
+        html += `
+                </tbody>
+            </table>
+        </div>
+        <div style="${pageStyle} page-break-before: always;">
+            <h2 style="color: #00d4ff; padding-bottom: 10px; font-size: 1.8rem; opacity: 0.5;">Full Hardware Quotation (Cont.)</h2>
+            <table style="width: 100%; margin-top: 20px; border-collapse: collapse;">
+                <thead>
+                    <tr style="text-align: left;">
+                        <th style="padding: 12px; border-bottom: 1px solid #00d4ff; font-size: 0.9rem; color: #00d4ff;">Item Description</th>
+                        <th style="padding: 12px; border-bottom: 1px solid #00d4ff; font-size: 0.9rem; color: #00d4ff; text-align: center;">Qty</th>
+                        <th style="padding: 12px; border-bottom: 1px solid #00d4ff; font-size: 0.9rem; color: #00d4ff; text-align: center;">UNIT PRICE</th>
+                        <th style="padding: 12px; border-bottom: 1px solid #00d4ff; font-size: 0.9rem; color: #00d4ff; text-align: right;">Total</th>
+                    </tr>
+                </thead>
+                <tbody style="font-size: 0.85rem;">
+        `;
+    }
+
+    html += `
+        <tr>
+            <td style="padding: 8px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                <strong>${device.name}</strong>
+            </td>
+            <td style="padding: 8px; border-bottom: 1px solid rgba(255,255,255,0.1); text-align: center;">${device.quantity}</td>
+            <td style="padding: 8px; border-bottom: 1px solid rgba(255,255,255,0.1); text-align: center;">${device.price}</td>
+            <td style="padding: 8px; border-bottom: 1px solid rgba(255,255,255,0.1); text-align: right;">${(device.price * device.quantity).toLocaleString()} EGP</td>
+        </tr>
+    `;
+
+    rowCount++; // Ensure rowCount is being incremented to make pagination work
+
+   
+});
+
+
+
     html += `
                 </tbody>
             </table>
-            <div style="margin-top: 30px; text-align: right; background: rgba(0,212,255,0.1); padding: 20px; page-break-inside: avoid;">
-                <h3 style="margin: 0;">Hardware Subtotal: <span style="color: #00d4ff;">${total.toLocaleString()} EGP</span></h3>
+            <div style=" text-align: right; background: rgba(0,212,255,0.1); padding: 15px; border-radius: 8px;margin-top:auto;">
+                <h3 style="margin: 0; font-size: 1.2rem;">Hardware Subtotal: <span style="color: #00d4ff;">${hardwareSubtotal.toLocaleString()} EGP</span></h3>
             </div>
         </div>
-    `;
+        <div class="html2pdf__page-break"></div>
 
-    // --- PAGE 5: SERVICES & INSTALLATION ---
-    html += `
         <div style="${pageStyle}">
-            <h2 style="color: #00d4ff; border-bottom: 2px solid #00d4ff; padding-bottom: 10px;">Services & Installation</h2>
-            <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
-                <tr style="border-bottom: 1px solid rgba(0,212,255,0.3);">
-                    <td style="padding: 20px;">Professional Installation & Configuration</td>
-                    <td style="text-align: right; color: #00d4ff; font-weight: bold;">INCLUDED</td>
-                </tr>
-                <tr style="border-bottom: 1px solid rgba(0,212,255,0.3);">
-                    <td style="padding: 20px;">System Programming & Integration</td>
-                    <td style="text-align: right; color: #00d4ff; font-weight: bold;">INCLUDED</td>
-                </tr>
-                <tr style="border-bottom: 1px solid rgba(0,212,255,0.3);">
-                    <td style="padding: 20px;">After-Sales Support & Maintenance (1 Year)</td>
-                    <td style="text-align: right; color: #00d4ff; font-weight: bold;">INCLUDED</td>
-                </tr>
+            <h2 style="color: #00d4ff; border-bottom: 1px solid #00d4ff; padding-bottom: 10px; margin-bottom: 30px; font-size: 1.8rem;">Project Summary</h2>
+            <div style="display: flex; flex-direction: column; gap: 15px; max-width: 800px; margin: 0 auto; width: 100%;">
+                <div style="${cardStyle} flex-direction: row; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 1.1rem;">Hardware Subtotal</span>
+                    <span style="font-size: 1.2rem; font-weight: 600;">${hardwareSubtotal.toLocaleString()} EGP</span>
+                </div>
+                <div style="${cardStyle} flex-direction: row; justify-content: space-between; align-items: center; border-left: 5px solid #00d4ff;">
+                    <div>
+                        <span style="font-size: 1.1rem; display: block;">Technical Services & Installation</span>
+                        <small style="opacity: 0.6;">Professional integration and setup (10%)</small>
+                    </div>
+                    
+                    <span style="font-size: 1.2rem; font-weight: 600;">+ ${fees} EGP</span>
+                </div>
+                <div style="${cardStyle} flex-direction: row; justify-content: space-between; align-items: center;">
+                    <div>
+                        <span style="font-size: 1.1rem; display: block;">Applicable Taxes</span>
+                        <small style="opacity: 0.6;">Standard processing tax </small>
+                    </div>
+                    <span style="font-size: 1.2rem; font-weight: 600; color: #00d4ff;">Included</span>
+                </div>
+                <div style="background: #00d4ff; color: #0a0e14; padding: 25px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; margin-top: 20px;">
+                    <h2 style="margin: 0; text-transform: uppercase; letter-spacing: 1px;">Total Project Investment</h2>
+                    <h2 style="margin: 0; font-size: 2.2rem;">${finalProjectTotal.toLocaleString()} EGP</h2>
+                </div>
+            </div>
+        </div>
+        <div class="html2pdf__page-break"></div>
+
+        <div style="${pageStyle}">
+            <h2 style="color: #00d4ff; border-bottom: 1px solid #00d4ff; padding-bottom: 10px; margin-bottom: 30px; font-size: 1.8rem;">Payment Schedule</h2>
+            <table style="width: 100%; border-collapse: collapse; background: rgba(255, 255, 255, 0.03); border-radius: 12px; overflow: hidden;">
+                <thead>
+                    <tr style="background: rgba(0, 212, 255, 0.15); color: #00d4ff; text-transform: uppercase; font-size: 0.85rem;">
+                        <th style="padding: 20px; text-align: left; border-bottom: 2px solid #00d4ff;">Phase</th>
+                        <th style="padding: 20px; text-align: left; border-bottom: 2px solid #00d4ff;">Milestone</th>
+                        <th style="padding: 20px; text-align: center; border-bottom: 2px solid #00d4ff;">%</th>
+                        <th style="padding: 20px; text-align: right; border-bottom: 2px solid #00d4ff;">Amount (EGP)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr style="border-bottom: 1px solid rgba(0, 212, 255, 0.1);">
+                        <td style="padding: 20px; font-weight: bold; color: #00d4ff;">1. Down Payment</td>
+                        <td style="padding: 20px; opacity: 0.8;">Required upon signing to initiate the project</td>
+                        <td style="padding: 20px; text-align: center; font-weight: bold;">50%</td>
+                        <td style="padding: 20px; text-align: right; font-weight: bold;">${(finalProjectTotal * 0.5).toLocaleString()}</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid rgba(0, 212, 255, 0.1);">
+                        <td style="padding: 20px; font-weight: bold; color: #00d4ff;">2. Hardware Delivery</td>
+                        <td style="padding: 20px; opacity: 0.8;">Due upon arrival of hardware at site</td>
+                        <td style="padding: 20px; text-align: center; font-weight: bold;">40%</td>
+                        <td style="padding: 20px; text-align: right; font-weight: bold;">${(finalProjectTotal * 0.4).toLocaleString()}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 20px; font-weight: bold; color: #00d4ff;">3. Final Handover</td>
+                        <td style="padding: 20px; opacity: 0.8;">Payable after testing & client handover</td>
+                        <td style="padding: 20px; text-align: center; font-weight: bold;">10%</td>
+                        <td style="padding: 20px; text-align: right; font-weight: bold;">${(finalProjectTotal * 0.1).toLocaleString()}</td>
+                    </tr>
+                </tbody>
             </table>
-            <p style="margin-top: 40px; font-style: italic; opacity: 0.7; line-height: 1.6;">
-                All services are performed by HAUSBOT Certified Technicians to ensure the highest quality of integration and performance.
-            </p>
-        </div>
-    `;
-
-    // --- PAGE 6: FINANCIAL SUMMARY ---
-    html += `
-        <div style="${pageStyle} display: flex; flex-direction: column; justify-content: center;">
-            <h2 style="color: #00d4ff; border-bottom: 2px solid #00d4ff; padding-bottom: 10px; margin-bottom: 40px;">Financial Summary</h2>
-            <div style="background: rgba(255,255,255,0.05); padding: 30px; border-radius: 10px;">
-                <div style="display: flex; justify-content: space-between; margin-bottom: 20px; font-size: 1.2rem;">
-                    <span>Total Hardware Components:</span>
-                    <span>${total.toLocaleString()} EGP</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; margin-bottom: 20px; font-size: 1.2rem;">
-                    <span>Total Services & Installation:</span>
-                    <span style="color: #00d4ff;">FREE</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; margin-bottom: 20px; font-size: 1.2rem;">
-                    <span>Value Added Tax (VAT):</span>
-                    <span>0 EGP</span>
-                </div>
-                <div style="border-top: 2px solid #00d4ff; margin-top: 20px; padding-top: 20px; display: flex; justify-content: space-between; align-items: center;">
-                    <h1 style="margin: 0; font-size: 2.5rem; color: #00d4ff;">Grand Total</h1>
-                    <h1 style="margin: 0; font-size: 2.5rem; color: #00d4ff;">${total.toLocaleString()} EGP</h1>
-                </div>
+            <div style="margin-top: 40px; padding: 20px; border-left: 4px solid #00d4ff; background: rgba(255,255,255,0.05);">
+                 <p style="margin: 0; font-size: 0.95rem; line-height: 1.6;">
+                    <strong>Total Investment:</strong> ${finalProjectTotal.toLocaleString()} EGP<br>
+                    <span style="opacity: 0.7;">Delivery & Installation: Estimated 30 days from down payment.</span>
+                 </p>
             </div>
-            <p style="text-align: center; margin-top: 30px; opacity: 0.6;">Inclusive of all taxes and services</p>
         </div>
-    `;
+        <div class="html2pdf__page-break"></div>
 
-    // --- PAGE 7: PAYMENT SCHEDULE ---
-    html += `
-        <div style="${pageStyle}">
-            <h2 style="color: #00d4ff; border-bottom: 2px solid #00d4ff; padding-bottom: 10px;">Payment Terms & Schedule</h2>
-            <div style="margin-top: 50px;">
-                <div style="display: flex; align-items: center; margin-bottom: 40px;">
-                    <div style="background: #00d4ff; color: black; padding: 20px; font-size: 2rem; font-weight: bold; min-width: 100px; text-align: center; border-radius: 10px;">50%</div>
-                    <div style="margin-left: 30px;">
-                        <h3 style="margin: 0; color: #00d4ff;">Down Payment</h3>
-                        <p style="margin: 5px 0 0 0; opacity: 0.8;">Required upon signing the proforma invoice.</p>
+    <div style="${pageStyle}">
+        <h2 style="color: #00d4ff; border-bottom: 1px solid #00d4ff; padding-bottom: 10px; margin-bottom: 30px; font-size: 1.8rem;">Project Standards</h2>
+        
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; flex-grow: 1;">
+            
+            <div style="${cardStyle} border-top: 4px solid #00d4ff;">
+                <div style="font-size: 2rem; margin-bottom: 10px;">📅</div>
+                <h3 style="color: #00d4ff; margin: 0 0 10px 0; font-size: 1.1rem; text-transform: uppercase;">Validity</h3>
+                <p style="font-size: 0.95rem; opacity: 0.8; line-height: 1.5; margin: 0;">This quotation is valid for 30 days from the date of issuance due to market fluctuations.</p>
+            </div>
+
+            <div style="${cardStyle} border-top: 4px solid #00d4ff;">
+                <div style="font-size: 2rem; margin-bottom: 10px;">🛡️</div>
+                <h3 style="color: #00d4ff; margin: 0 0 10px 0; font-size: 1.1rem; text-transform: uppercase;">Warranty</h3>
+                <p style="font-size: 0.95rem; opacity: 0.8; line-height: 1.5; margin: 0;">1-year comprehensive warranty on any industrial defects .</p>
+            </div>
+
+            <div style="${cardStyle} border-top: 4px solid #00d4ff;">
+                <div style="font-size: 2rem; margin-bottom: 10px;">⚡</div>
+                <h3 style="color: #00d4ff; margin: 0 0 10px 0; font-size: 1.1rem; text-transform: uppercase;">Support</h3>
+                <p style="font-size: 0.95rem; opacity: 0.8; line-height: 1.5; margin: 0;">24/7 Remote technical assistance for the first 3 months following project handover.</p>
+            </div>
+
+            <div style="${cardStyle} border-top: 4px solid #00d4ff;">
+                <div style="font-size: 2rem; margin-bottom: 10px;">📦</div>
+                <h3 style="color: #00d4ff; margin: 0 0 10px 0; font-size: 1.1rem; text-transform: uppercase;">Delivery</h3>
+                <p style="font-size: 0.95rem; opacity: 0.8; line-height: 1.5; margin: 0;">Hardware delivery is expected within 22 business days from the initial down payment.</p>
+            </div>
+
+        </div>
+        
+        <div style="margin-top: 30px; background: rgba(0, 212, 255, 0.05); padding: 15px; border-radius: 8px; text-align: center; border: 1px dashed rgba(0, 212, 255, 0.3);">
+            <span style="font-size: 0.85rem; opacity: 0.6;">All systems are integrated according to international smart home security protocols.</span>
+        </div>
+    </div>
+        <div class="html2pdf__page-break"></div>
+
+        <div style="${pageStyle} justify-content: center; align-items: center; text-align: center;">
+<div style="margin-top: 30px; text-align: center;">
+    <div style="display: inline-block;padding: 12px; ">
+            <img src="https://raw.githubusercontent.com/Hausbot-eg/Survey/main/logo.png" style="max-width: 150px; margin-top: 60px; opacity: 0.5;">
+            
+
+    </div>
+      
+</div>
+            <div style="max-width: 600px;">
+                <h2 style="color: #00d4ff; font-size: 2.5rem; margin-bottom: 10px;">We're always here for you </h2>
+                <p style="font-size: 1.2rem; opacity: 0.8; margin-bottom: 40px;">Our team is ready to answer any technical or financial questions you may have.</p>
+                <div style="display: flex; justify-content: center; gap: 30px;">
+                    <div style="${cardStyle} padding: 30px; min-width: 200px;">
+                        <div style="font-size: 2rem; margin-bottom: 10px;">📞</div>
+                        <strong style="color: #00d4ff;">Call Us</strong>
+                        <p style="margin: 5px 0 0 0;">+20 104 074 3437</p>
+                    </div>
+                    <div style="${cardStyle} padding: 30px; min-width: 200px;">
+                        <div style="font-size: 2rem; margin-bottom: 10px;">📧</div>
+                        <strong style="color: #00d4ff;">Email Us</strong>
+                        <p style="margin: 5px 0 0 0;">thesmarthome404@gmail.com</p>
                     </div>
                 </div>
-                <div style="display: flex; align-items: center; margin-bottom: 40px;">
-                    <div style="background: #00d4ff; color: black; padding: 20px; font-size: 2rem; font-weight: bold; min-width: 100px; text-align: center; border-radius: 10px;">40%</div>
-                    <div style="margin-left: 30px;">
-                        <h3 style="margin: 0; color: #00d4ff;">Hardware Delivery</h3>
-                        <p style="margin: 5px 0 0 0; opacity: 0.8;">Due upon hardware arrival at the installation site.</p>
-                    </div>
-                </div>
-                <div style="display: flex; align-items: center;">
-                    <div style="background: #00d4ff; color: black; padding: 20px; font-size: 2rem; font-weight: bold; min-width: 100px; text-align: center; border-radius: 10px;">10%</div>
-                    <div style="margin-left: 30px;">
-                        <h3 style="margin: 0; color: #00d4ff;">Final Handover</h3>
-                        <p style="margin: 5px 0 0 0; opacity: 0.8;">Payable after successful testing and client handover.</p>
-                    </div>
-                </div>
             </div>
-        </div>
-    `;
-
-    // --- PAGE 8: TERMS & CONTACT ---
-    html += `
-        <div style="${pageStyle}">
-            <h2 style="color: #00d4ff; border-bottom: 2px solid #00d4ff; padding-bottom: 10px;">Terms & Conditions</h2>
-            <div style="margin-top: 30px;">
-                <h3 style="color: #00d4ff;">Validity</h3>
-                <p>This proforma invoice is valid for 90 days from the date of issuance.</p>
-                <h3 style="color: #00d4ff; margin-top: 30px;">Warranty</h3>
-                <p>We provide a 2-year comprehensive warranty on all hardware components.</p>
-                <div style="background: rgba(255,0,0,0.1); border-left: 5px solid red; padding: 20px; margin-top: 40px;">
-                    <strong>! Important Notes:</strong><br>
-                    Final prices are subject to change based on a final site survey.
-                </div>
-            </div>
-        </div>
-
-        <div style="${pageStyle} display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
-            <h2 style="color: #00d4ff; font-size: 2.5rem;">Need Help?</h2>
-            <p style="font-size: 1.5rem; margin-top: 20px;">Call Us</p>
-            <div style="border: 2px solid #00d4ff; padding: 20px 40px; border-radius: 50px; font-size: 2rem; color: #00d4ff; margin-top: 20px;">
-                +20 10 40743437
-            </div>
-            <img src="https://raw.githubusercontent.com/Farah-1/housbot/main/hausbot_background.jpg" style="max-width: 150px; margin-top: 60px; opacity: 0.5;">
         </div>
     `;
 
@@ -773,26 +981,15 @@ async function generatePDF() {
 
     const opt = {
         margin: 0,
-        filename: `${property.clientName}_Proforma_Invoice.pdf`,
+        filename: `${property.clientName}_Survey.pdf`,
         image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { 
-            scale: 2, 
-            backgroundColor: '#0a0e14', 
-            useCORS: true,
-            scrollY: 0,
-            scrollX: 0
-        },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-        pagebreak: { mode: 'avoid-all' }
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#0a0e14', scrollY: 0 },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
+        pagebreak: { mode: ['css', 'legacy'] }
     };
 
-    try {
-        await html2pdf().set(opt).from(element).save();
-    } catch (err) {
-        console.error("PDF Error:", err);
-    }
+    await html2pdf().set(opt).from(element).save();
 }
-
 
 
 // ===== SETTINGS MODAL =====
@@ -833,12 +1030,14 @@ function closeAddDeviceModal() {
 }
 
 function clearAddDeviceForm() {
-    document.getElementById('newDeviceName').value = '';
-    document.getElementById('newDeviceCategory').value = '';
-    document.getElementById('newDeviceBrand').value = '';
-    document.getElementById('newDeviceProtocol').value = '';
-    document.getElementById('newDevicePrice').value = '';
-    document.getElementById('newDeviceSupplier').value = '';
+    const fields = [
+        'newDeviceName', 'newDeviceCategory', 'newDeviceBrand', 'newDeviceProtocol', 'newDevicePrice', 'newDeviceSupplier',
+        'addDeviceName', 'addDeviceBrand', 'addDeviceCategory', 'addDeviceSupplier', 'addDeviceProtocol', 'addDevicePrice', 'addDeviceGroup', 'addDeviceCoverage'
+    ];
+    fields.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
 }
 
 
@@ -873,48 +1072,13 @@ async function addNewDevice() {
     }
 }
 
-function openEditDeviceModal(deviceId) {
-    const device = getDeviceById(deviceId);
-    if (!device) return;
-
-    editingDeviceId = deviceId;
-    document.getElementById('editDeviceName').value = device.name;
-    document.getElementById('editDevicePrice').value = device.price;
-    document.getElementById('editDeviceBrand').value = device.brand;
-    document.getElementById('editDeviceProtocol').value = device.protocol;
-    document.getElementById('editDeviceSupplier').value = device.supplier;
-
-    document.getElementById('editDeviceModal').classList.add('active');
-}
 
 function closeEditDeviceModal() {
     document.getElementById('editDeviceModal').classList.remove('active');
     editingDeviceId = null;
 }
 
-async function saveEditedDevice() {
-    if (!editingDeviceId) return;
-    const { doc, updateDoc } = window.fbMethods;
 
-    const name = document.getElementById('editDeviceName').value.trim();
-    const price = parseFloat(document.getElementById('editDevicePrice').value) || 0;
-
-    try {
-        const deviceRef = doc(window.db, "devices", editingDeviceId);
-        await updateDoc(deviceRef, {
-            name: name,
-            price: price,
-            brand: document.getElementById('editDeviceBrand').value.trim(),
-            protocol: document.getElementById('editDeviceProtocol').value.trim(),
-            supplier: document.getElementById('editDeviceSupplier').value.trim()
-        });
-
-        closeEditDeviceModal();
-        alert('Device updated in Cloud!');
-    } catch (e) {
-        console.error("Error updating device:", e);
-    }
-}
 
 function deleteDevice(deviceId) {
     if (confirm('Are you sure you want to delete this device?')) {
@@ -1006,3 +1170,386 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     console.log('Smart Home Survey App Initialized with Central DB');
 });
+function goToAdmin() {
+    showPage('adminPage');
+    renderAdminDevices();
+    renderGroupColorSettings();
+}
+
+function renderGroupColorSettings() {
+    const container = document.getElementById('groupColorsContainer');
+    if (!container) return;
+    container.innerHTML = '';
+
+    for (let i = 1; i <= 10; i++) {
+        const color = groupColors[i] || '#ffffff';
+        const card = document.createElement('div');
+        card.className = 'group-color-card';
+        card.innerHTML = `
+            <div class="group-label">Group ${i}</div>
+            <div class="color-preview-circle" style="background-color: ${color}">
+                <input type="color" id="groupColorInput-${i}" value="${color}" onchange="this.parentElement.style.backgroundColor = this.value; this.parentElement.nextElementSibling.innerText = this.value.toUpperCase()">
+            </div>
+            <div class="hex-label">${color.toUpperCase()}</div>
+        `;
+        container.appendChild(card);
+    }
+}
+
+async function saveGroupColors() {
+    const newColors = {};
+    for (let i = 1; i <= 10; i++) {
+        newColors[i] = document.getElementById(`groupColorInput-${i}`).value;
+    }
+
+    const { doc, setDoc } = window.fbMethods;
+    try {
+        await setDoc(doc(window.db, "settings", "groupColors"), newColors);
+        alert("Group colors saved to Firebase!");
+    } catch (e) {
+        console.error("Error saving group colors:", e);
+        alert("Failed to save group colors.");
+    }
+}
+
+
+
+
+
+
+// --- 1. RENDER TABLE WITH ALL DATA ---
+function renderAdminDevices() {
+    const list = document.getElementById('adminDevicesList');
+    if (!list) return;
+    list.innerHTML = '';
+
+    devicesDatabase.forEach(device => {
+        let dateDisplay = 'New';
+        const rawDate = device.createdDate || device.createdAt || device.date;
+
+        if (rawDate) {
+            let d;
+
+            // 1. Handle Firebase Timestamp Object {seconds, nanoseconds}
+            if (rawDate && typeof rawDate === 'object' && typeof rawDate.toDate === 'function') {
+                d = rawDate.toDate();
+            } 
+            // 2. Handle JS Date Object or ISO String
+            else if (rawDate instanceof Date || !isNaN(Date.parse(rawDate))) {
+                d = new Date(rawDate);
+            }
+            // 3. Handle the "Legacy" String Format: "February 24, 2026 at..."
+            else {
+                let cleaned = String(rawDate)
+                    .replace(' at ', ' ')
+                    .split(' UTC')[0]
+                    .replace(/\u202F/g, ' '); 
+                d = new Date(cleaned);
+            }
+
+            // Final check to see if we got a valid date
+            dateDisplay = (d && !isNaN(d.getTime())) ? d.toLocaleDateString() : 'Legacy';
+        }
+
+        const status = device.status || 'Active';
+        const statusClass = status === 'Active' ? 'status-active' : 'status-inactive';
+
+        const row = document.createElement('tr');
+        row.style.borderBottom = "1px solid rgba(255,255,255,0.05)";
+        row.innerHTML = `
+            <td style="padding: 15px 10px;">
+                <strong style="color:var(--primary-color)">${device.name || 'Unnamed'}</strong><br>
+                <small style="opacity:0.7">${device.brand || '—'} | ${device.supplier || '—'}</small>
+            </td>
+            <td>${device.category || 'switch'}</td>
+            <td style="text-align: center;">
+                <span style="background: ${groupColors[device.group] || '#555'}; color: #000; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: bold;">
+                    G${device.group || 1}
+                </span>
+            </td>
+            <td>${device.protocol || '—'}</td>
+            <td style="color: #4cd137; font-weight: bold;">${device.price || 0} EGP</td>
+            <td><span class="status-pill ${statusClass}">${status}</span></td>
+            <td>${device.coverage || 0}m</td>
+            <td style="font-size: 0.8rem; opacity: 0.6;">${dateDisplay}</td>
+            <td style="text-align: center;">
+                <button class="btn-settings" onclick="openEditDeviceModal('${device.firebaseId}')">✏️</button>
+                <button class="btn-settings" style="background: rgba(255, 71, 87, 0.2);" onclick="deleteDeviceFromAdmin('${device.firebaseId}')">🗑️</button>
+            </td>
+        `;
+        list.appendChild(row);
+    });
+}
+
+// --- 2. SAVE NEW DEVICE (Capturing Date & Status) ---
+async function saveNewDevice() {
+    const data = {
+        name: document.getElementById('addDeviceName').value,
+        brand: document.getElementById('addDeviceBrand').value,
+        category: document.getElementById('addDeviceCategory').value,
+        supplier: document.getElementById('addDeviceSupplier').value,
+        protocol: document.getElementById('addDeviceProtocol').value,
+        price: parseFloat(document.getElementById('addDevicePrice').value) || 0,
+        group: parseInt(document.getElementById('addDeviceGroup').value) || 1,
+        coverage: parseFloat(document.getElementById('addDeviceCoverage').value) || 0,
+        status: document.getElementById('addDeviceStatus').value,
+        active: document.getElementById('addDeviceStatus').value === 'Active',
+        createdDate: new Date().toISOString() // This ensures the date is valid
+    };
+
+    if (!data.name) return alert("Name is required");
+
+    const { collection, addDoc } = window.fbMethods;
+    try {
+        await addDoc(collection(window.db, "devices"), data);
+        closeAddDeviceModal();
+    } catch (e) { console.error(e); }
+}
+// --- 3. FETCH DATA (Including Status) ---
+// Ensure this is NOT inside another function or DOMContentLoaded
+function openEditDeviceModal(firebaseId) {
+    const device = devicesDatabase.find(d => d.firebaseId === firebaseId);
+    if (!device) return;
+
+    currentEditingDeviceId = firebaseId;
+
+    // Helper function to prevent "Cannot set properties of null" errors
+    const safeSet = (id, value) => {
+        const element = document.getElementById(id);
+        if (element) {
+            element.value = value || '';
+        } else {
+            console.warn(`Element with ID ${id} was not found in HTML.`);
+        }
+    };
+
+    // Now we set all fields safely
+    safeSet('editDeviceName', device.name);
+    safeSet('editDeviceBrand', device.brand);
+    safeSet('editDeviceCategory', device.category);
+    safeSet('editDeviceSupplier', device.supplier);
+    safeSet('editDeviceProtocol', device.protocol);
+    safeSet('editDevicePrice', device.price);
+    safeSet('editDeviceGroup', device.group);
+    safeSet('editDeviceCoverage', device.coverage);
+    safeSet('editDeviceStatus', device.status || 'Active');
+
+    document.getElementById('editDeviceModal').classList.add('active');
+}
+// --- SAVE EDITED ---
+async function saveEditedDevice() {
+    const { doc, updateDoc } = window.fbMethods;
+    const updatedData = {
+        name: document.getElementById('editDeviceName').value,
+        brand: document.getElementById('editDeviceBrand').value,
+        category: document.getElementById('editDeviceCategory').value,
+        supplier: document.getElementById('editDeviceSupplier').value,
+        protocol: document.getElementById('editDeviceProtocol').value,
+        price: parseFloat(document.getElementById('editDevicePrice').value) || 0,
+        group: parseInt(document.getElementById('editDeviceGroup').value) || 1,
+        coverage: parseFloat(document.getElementById('editDeviceCoverage').value) || 0,
+        status: document.getElementById('editDeviceStatus').value,
+        active: document.getElementById('editDeviceStatus').value === 'Active'
+    };
+    await updateDoc(doc(window.db, "devices", currentEditingDeviceId), updatedData);
+    document.getElementById('editDeviceModal').classList.remove('active');
+}
+async function deleteDeviceFromAdmin(firebaseId) {
+    if (!firebaseId) return;
+    
+    if (confirm("Delete this device from the central database?")) {
+        const { doc, deleteDoc } = window.fbMethods;
+        try {
+            await deleteDoc(doc(window.db, "devices", firebaseId));
+            // renderAdminDevices will auto-fire due to onSnapshot in data.js
+        } catch (e) {
+            console.error("Delete failed:", e);
+        }
+    }
+}
+// Global Send Data function to handle child window requests
+async function fetchAndSendArchitectureData(targetId, targetWindow = null) {
+    if (!window.fbMethods || !window.db) {
+        console.warn("[PARENT] Firebase not ready. Retrying...");
+        setTimeout(() => fetchAndSendArchitectureData(targetId, targetWindow), 1000);
+        return;
+    }
+
+    const { doc, getDoc } = window.fbMethods;
+    let savedLayout = null;
+    
+    console.log(`[PARENT] Fetching architecture for property: ${targetId}`);
+
+    try {
+        // 1. Force fetch from architectures collection
+        const archRef = doc(window.db, "architectures", targetId);
+        const archSnap = await getDoc(archRef);
+        
+        if (archSnap.exists()) {
+            savedLayout = archSnap.data();
+        } else {
+            const propRef = doc(window.db, "properties", targetId);
+            const propSnap = await getDoc(propRef);
+            if (propSnap.exists()) {
+                const propData = propSnap.data();
+                savedLayout = propData.architectLayout || propData.architectureLayout;
+            }
+        }
+    } catch (e) {
+        console.error("Firebase fetch failed:", e);
+    }
+
+    // If no layout was found, ONLY create a "Full Structure" if we are CERTAIN it's new
+    if (!savedLayout) {
+        savedLayout = {
+            allArchitectures: [],
+            vertices: [],
+            placedDevices: [],
+            textLabels: [],
+            isClosed: false,
+            lastUpdated: new Date().toISOString()
+        };
+    } else {
+        // Ensure all arrays exist even if we loaded a partial layout
+        if (!savedLayout.allArchitectures) savedLayout.allArchitectures = [];
+        if (!savedLayout.vertices) savedLayout.vertices = [];
+        if (!savedLayout.placedDevices) savedLayout.placedDevices = [];
+        if (!savedLayout.textLabels) savedLayout.textLabels = [];
+    }
+
+    // Get property details
+    let selectedProperty = propertiesDatabase.find(p => p.firebaseId === targetId);
+    
+    // Fallback: Fetch devices if database is empty (e.g. on fresh reload)
+    if (!devicesDatabase || devicesDatabase.length === 0) {
+        console.log("[PARENT] Devices database empty, fetching from Firebase...");
+        try {
+            const { collection, getDocs } = window.fbMethods;
+            const devSnap = await getDocs(collection(window.db, "devices"));
+            devicesDatabase = devSnap.docs.map(doc => ({ firebaseId: doc.id, ...doc.data() }));
+        } catch (e) {
+            console.error("[PARENT] Failed to fetch devices fallback:", e);
+        }
+    }
+
+    // Fallback: Fetch group colors if empty
+    if (!groupColors || Object.keys(groupColors).length === 0) {
+        try {
+            const colorSnap = await getDoc(doc(window.db, "settings", "groupColors"));
+            if (colorSnap.exists()) groupColors = colorSnap.data();
+        } catch (e) {}
+    }
+
+    try {
+        const propRef = doc(window.db, "properties", targetId);
+        const propSnap = await getDoc(propRef);
+        if (propSnap.exists()) {
+            selectedProperty = { firebaseId: propSnap.id, ...propSnap.data() };
+        }
+    } catch (e) {}
+
+    const payload = {
+        type: 'INIT_DATA',
+        devices: devicesDatabase,    
+        property: selectedProperty,  
+        propertyId: targetId,
+        groupColors: groupColors,
+        savedLayout: savedLayout 
+    };
+
+    if (targetWindow && !targetWindow.closed) {
+        console.log("[PARENT] postMessage to requester window.");
+        targetWindow.postMessage(payload, '*');
+    } else if (window.currentArchitectWindow && !window.currentArchitectWindow.closed) {
+        console.log("[PARENT] postMessage to tracked architect window.");
+        window.currentArchitectWindow.postMessage(payload, '*');
+    }
+}
+
+// Inside app.js
+function openArchitectTool() {
+    if (!currentPropertyId) {
+        alert("Please select a property first.");
+        return;
+    }
+
+    // CRITICAL: Open window immediately to avoid popup blockers
+    const architectWindow = window.open(`coverage.html?propertyId=${currentPropertyId}`, '_blank');
+    if (!architectWindow) {
+        alert("Popup blocked! Please allow popups for this site.");
+        return;
+    }
+
+    window.currentArchitectWindow = architectWindow;
+    window.currentArchitectSendData = fetchAndSendArchitectureData;
+
+    // Trigger initial data send
+    setTimeout(() => {
+        if (architectWindow && !architectWindow.closed) {
+            console.log("[PARENT] Initial fetch for architect window...");
+            fetchAndSendArchitectureData(currentPropertyId, architectWindow);
+        }
+    }, 2500); // Increased timeout to ensure Firestore has time to return data
+}
+
+// Global Message Listener (Moved outside openArchitectTool)
+window.addEventListener('message', async (event) => {
+    const isReadyRequest = event.data === 'READY_FOR_DATA' || (event.data && event.data.type === 'READY_FOR_DATA');
+    
+    if (isReadyRequest) {
+        const requestedId = event.data.propertyId || currentPropertyId;
+        console.log(`[PARENT] READY_FOR_DATA received for ID: ${requestedId}`);
+        
+        // Use global function to send data to the requester
+        fetchAndSendArchitectureData(requestedId, event.source);
+    } else if (event.data.type === 'SAVE_LAYOUT') {
+        const { doc, setDoc } = window.fbMethods;
+        const targetId = event.data.propertyId || currentPropertyId;
+        
+        if (!targetId) {
+            console.error("[PARENT] No property ID provided for save!");
+            return;
+        }
+
+        try {
+            console.log(`[PARENT] Saving layout to architectures/${targetId}...`);
+            const archRef = doc(window.db, "architectures", targetId);
+            const layoutToSave = {
+                ...event.data.layout,
+                lastUpdated: new Date().toISOString()
+            };
+            
+            await setDoc(archRef, layoutToSave);
+            console.log("[PARENT] Layout saved successfully to Firebase architectures collection!");
+            
+            // CRITICAL: Update the global propertiesDatabase in memory as well
+            const prop = propertiesDatabase.find(p => p.firebaseId === targetId);
+            if (prop) {
+                prop.architectLayout = layoutToSave;
+                console.log("[PARENT] Local propertiesDatabase updated for ID:", targetId);
+            }
+
+        } catch (e) {
+            console.error("[PARENT] Save to Firebase failed:", e);
+            alert("Failed to save architecture to cloud. Check console for details.");
+        }
+    }
+});
+/**
+ * Cross-references property device data with master device data
+ * @param {string} deviceId - The ID stored in the property
+ * @returns {object} - The full device details including coverage
+ */
+function getFullDeviceDetails(deviceId) {
+    // Look through the master devices list we fetched from Firebase
+    const masterDevice = devicesDatabase.find(d => d.firebaseId === deviceId);
+    
+    if (masterDevice) {
+        return {
+            name: masterDevice.deviceName,
+            coverage: masterDevice.deviceCoverage || masterDevice.coverage || 0,
+            category: masterDevice.category
+        };
+    }
+    return { name: "Unknown", coverage: 0 };
+}
